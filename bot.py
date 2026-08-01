@@ -47,11 +47,16 @@ async def on_shutdown():
 # HELPERS
 # ============================================================
 def calc_rank(level, wins):
-    if level >= 50 and wins >= 100: return "Special Grade"
-    if level >= 30 and wins >= 50: return "Semi-Special"
-    if level >= 20 and wins >= 30: return "Grade 1"
-    if level >= 15 and wins >= 20: return "Grade 2"
-    if level >= 10 and wins >= 10: return "Grade 3"
+    if level >= 50 and wins >= 100:
+        return "Special Grade"
+    if level >= 30 and wins >= 50:
+        return "Semi-Special"
+    if level >= 20 and wins >= 30:
+        return "Grade 1"
+    if level >= 15 and wins >= 20:
+        return "Grade 2"
+    if level >= 10 and wins >= 10:
+        return "Grade 3"
     return "Grade 4"
 
 def calc_level(xp):
@@ -59,6 +64,8 @@ def calc_level(xp):
 
 def parse_effect(eff_str):
     out = {}
+    if not eff_str:
+        return out
     for part in eff_str.split('|'):
         if ':' in part:
             k, v = part.split(':')
@@ -68,7 +75,10 @@ def parse_effect(eff_str):
     return out
 
 def build_hp_bar(current, max_hp, length=15):
+    if max_hp <= 0:
+        max_hp = 1
     ratio = current / max_hp if max_hp > 0 else 0
+    ratio = max(0, min(1, ratio))
     filled = int(ratio * length)
     empty = length - filled
     return "█" * filled + "░" * empty
@@ -101,13 +111,21 @@ async def start_cmd(message: types.Message):
         pass
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("🧙 Profile", callback_data="welcome_profile"),
-         InlineKeyboardButton("⚔️ Battle", callback_data="welcome_battle")],
-        [InlineKeyboardButton("🎭 Characters", callback_data="welcome_characters"),
-         InlineKeyboardButton("🏪 Shop", callback_data="welcome_shop")],
-        [InlineKeyboardButton("👹 Enemies", callback_data="welcome_enemies"),
-         InlineKeyboardButton("📦 Bag", callback_data="welcome_bag")],
-        [InlineKeyboardButton("📋 Commands", callback_data="welcome_commands")]
+        [
+            InlineKeyboardButton(text="🧙 Profile", callback_data="welcome_profile"),
+            InlineKeyboardButton(text="⚔️ Battle", callback_data="welcome_battle")
+        ],
+        [
+            InlineKeyboardButton(text="🎭 Characters", callback_data="welcome_characters"),
+            InlineKeyboardButton(text="🏪 Shop", callback_data="welcome_shop")
+        ],
+        [
+            InlineKeyboardButton(text="👹 Enemies", callback_data="welcome_enemies"),
+            InlineKeyboardButton(text="📦 Bag", callback_data="welcome_bag")
+        ],
+        [
+            InlineKeyboardButton(text="📋 Commands", callback_data="welcome_commands")
+        ]
     ])
 
     if player:
@@ -213,23 +231,20 @@ async def profile_cmd(message: types.Message):
 # ============================================================
 # COMMAND: /characters (PAGINATION)
 # ============================================================
-# We'll store page in callback_data
 @dp.message(Command("characters"))
 async def characters_cmd(message: types.Message):
-    # Get total count
     try:
         async with db_pool.acquire() as conn:
             count = await conn.fetchval("SELECT COUNT(*) FROM characters")
             if count == 0:
                 await message.reply("No characters available.")
                 return
-            # Send first page (page 0)
             await send_char_page(message, 0)
     except Exception as e:
         await message.reply(f"Error: {e}")
 
 async def send_char_page(message_or_callback, page):
-    per_page = 1  # one character per page
+    per_page = 1
     try:
         async with db_pool.acquire() as conn:
             offset = page * per_page
@@ -253,12 +268,12 @@ async def send_char_page(message_or_callback, page):
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton("⬅️", callback_data=f"char_page_{page-1}"),
-                    InlineKeyboardButton(f"{page+1}", callback_data="char_page_noop"),
-                    InlineKeyboardButton("➡️", callback_data=f"char_page_{page+1}")
+                    InlineKeyboardButton(text="⬅️", callback_data=f"char_page_{page-1}"),
+                    InlineKeyboardButton(text=f"{page+1}", callback_data="char_page_noop"),
+                    InlineKeyboardButton(text="➡️", callback_data=f"char_page_{page+1}")
                 ],
                 [
-                    InlineKeyboardButton(f"✅ Select {char['name']}", callback_data=f"char_select_{char['id']}")
+                    InlineKeyboardButton(text=f"✅ Select {char['name']}", callback_data=f"char_select_{char['id']}")
                 ]
             ])
 
@@ -268,7 +283,7 @@ async def send_char_page(message_or_callback, page):
                     await msg.reply_photo(photo=char['image_url'], caption=caption, reply_markup=keyboard)
                 else:
                     await msg.reply(caption, reply_markup=keyboard)
-            else:  # callback
+            else:
                 callback = message_or_callback
                 if char.get('image_url'):
                     await callback.message.edit_media(
@@ -301,7 +316,6 @@ async def char_select_cb(callback: types.CallbackQuery):
             if not char:
                 await callback.answer("Character not found!", show_alert=True)
                 return
-            # Update player
             await conn.execute("""
                 UPDATE players 
                 SET character_name = $1, 
@@ -311,7 +325,6 @@ async def char_select_cb(callback: types.CallbackQuery):
             """, char['name'], char['atk'], char['def'], char['spd'], 
                char['hp'], char['ce'], user_id)
             await callback.answer(f"Selected {char['name']}!")
-            # Edit message to show selection
             caption = (
                 f"✅ You selected **{char['name']}** as your fighter!\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -335,7 +348,7 @@ async def char_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
 # ============================================================
-# COMMAND: /select (alternative)
+# COMMAND: /select
 # ============================================================
 @dp.message(Command("select"))
 async def select_cmd(message: types.Message):
@@ -374,7 +387,6 @@ async def shop_cmd(message: types.Message):
             if not items:
                 await message.reply("Shop is empty.")
                 return
-            # Group by category
             cats = {}
             for it in items:
                 cats.setdefault(it['category'], []).append(it)
@@ -420,19 +432,15 @@ async def buy_cmd(message: types.Message):
                 await message.reply(f"❌ Not enough Yen! You have ¥{player['yen']:,}, need ¥{item['price']:,}.")
                 return
 
-            # Deduct yen
             await conn.execute("UPDATE players SET yen = yen - $1 WHERE user_id = $2", item['price'], user_id)
 
-            # Add to player's bag/techniques based on category
             if item['category'] == 'technique':
-                # Store in techniques array
                 await conn.execute("UPDATE players SET techniques = array_append(techniques, $1) WHERE user_id = $2",
                                    item['name'], user_id)
             elif item['category'] == 'domain':
                 await conn.execute("UPDATE players SET domains = array_append(domains, $1) WHERE user_id = $2",
                                    item['name'], user_id)
             else:
-                # Consumables, elixirs, weapons go to bag
                 await conn.execute("UPDATE players SET bag = array_append(bag, $1) WHERE user_id = $2",
                                    item['name'], user_id)
 
@@ -589,7 +597,7 @@ async def equip_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# COMMAND: /learn (technique from inventory)
+# COMMAND: /learn
 # ============================================================
 @dp.message(Command("learn"))
 async def learn_cmd(message: types.Message):
@@ -607,18 +615,13 @@ async def learn_cmd(message: types.Message):
                 return
             tech = await conn.fetchrow("SELECT * FROM techniques WHERE name ILIKE $1", tech_name)
             if not tech:
-                await message.reply(f"Technique '{tech_name}' not found in the database.")
+                await message.reply(f"Technique '{tech_name}' not found.")
                 return
             # Check if already learned
             techniques = player.get('techniques') or []
             if tech_name in techniques:
                 await message.reply(f"🌀 You already know **{tech_name}**!")
                 return
-            # Check if the character has this technique (optional)
-            char_name = player.get('character_name')
-            if tech['character_name'] and char_name and tech['character_name'] != char_name:
-                # Allow learning any technique regardless? We'll allow but add a note.
-                pass
             # Learn: add to techniques array
             await conn.execute("UPDATE players SET techniques = array_append(techniques, $1) WHERE user_id = $2",
                                tech_name, user_id)
@@ -632,7 +635,7 @@ async def learn_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# COMMAND: /techniques (list learned)
+# COMMAND: /techniques
 # ============================================================
 @dp.message(Command("techniques"))
 async def techniques_cmd(message: types.Message):
@@ -649,7 +652,6 @@ async def techniques_cmd(message: types.Message):
                 return
             resp = "🌀 **Your Techniques**\n━━━━━━━━━━━━━━━━━━━\n"
             for t in techs:
-                # Get details
                 detail = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", t)
                 if detail:
                     resp += f"  • {t} (DMG: {detail['damage_multiplier']}x, CE: {detail['ce_cost']})\n"
@@ -660,7 +662,7 @@ async def techniques_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# COMMAND: /enemies (compact)
+# COMMAND: /enemies
 # ============================================================
 @dp.message(Command("enemies"))
 async def enemies_cmd(message: types.Message):
@@ -687,9 +689,6 @@ async def enemies_cmd(message: types.Message):
 # ============================================================
 # BATTLE SYSTEM
 # ============================================================
-# We'll implement full turn-based battle with inline buttons.
-# Battle state is stored in battles table.
-
 @dp.message(Command("battle"))
 async def battle_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -705,24 +704,26 @@ async def battle_cmd(message: types.Message):
                 await message.reply("No enemies available!")
                 return
 
-            # Insert battle
+            # Insert battle with enemy stats
             battle_id = await conn.fetchval("""
-                INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
+                                     enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
+                                     is_boss, enemy_reward_yen, enemy_reward_xp)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE, $10, $11)
                 RETURNING id
-            """, message.chat.id, user_id, player['hp'], enemy['hp'], enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'])
+            """, message.chat.id, user_id, player['hp'], enemy['hp'], 
+               enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
+               enemy.get('reward_yen', 1000), enemy.get('reward_xp', 100))
 
-            # Store enemy image_url in a separate variable for later use
             enemy_image = enemy.get('image_url')
 
-            # Build keyboard with battle actions
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton("⚔️ Attack", callback_data=f"battle_act_{battle_id}_attack"),
-                 InlineKeyboardButton("🛡️ Defend", callback_data=f"battle_act_{battle_id}_defend")],
-                [InlineKeyboardButton("💥 Special", callback_data=f"battle_act_{battle_id}_special"),
-                 InlineKeyboardButton("🌀 Technique", callback_data=f"battle_act_{battle_id}_technique")],
-                [InlineKeyboardButton("🌐 Domain", callback_data=f"battle_act_{battle_id}_domain"),
-                 InlineKeyboardButton("🏃 Run", callback_data=f"battle_act_{battle_id}_run")]
+                [InlineKeyboardButton(text="⚔️ Attack", callback_data=f"battle_act_{battle_id}_attack"),
+                 InlineKeyboardButton(text="🛡️ Defend", callback_data=f"battle_act_{battle_id}_defend")],
+                [InlineKeyboardButton(text="💥 Special", callback_data=f"battle_act_{battle_id}_special"),
+                 InlineKeyboardButton(text="🌀 Technique", callback_data=f"battle_act_{battle_id}_technique")],
+                [InlineKeyboardButton(text="🌐 Domain", callback_data=f"battle_act_{battle_id}_domain"),
+                 InlineKeyboardButton(text="🏃 Run", callback_data=f"battle_act_{battle_id}_run")]
             ])
 
             char_name = player.get('character_name') or "You"
@@ -765,20 +766,24 @@ async def boss_cmd(message: types.Message):
             if not enemy:
                 await message.reply(f"Boss '{boss_name}' not found.")
                 return
-            # Same as battle but mark as boss
+
             battle_id = await conn.fetchval("""
-                INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd, is_boss)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
+                INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
+                                     enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
+                                     is_boss, enemy_reward_yen, enemy_reward_xp)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10, $11)
                 RETURNING id
-            """, message.chat.id, user_id, player['hp'], enemy['hp'], enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'])
+            """, message.chat.id, user_id, player['hp'], enemy['hp'], 
+               enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
+               enemy.get('reward_yen', 5000), enemy.get('reward_xp', 500))
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton("⚔️ Attack", callback_data=f"battle_act_{battle_id}_attack"),
-                 InlineKeyboardButton("🛡️ Defend", callback_data=f"battle_act_{battle_id}_defend")],
-                [InlineKeyboardButton("💥 Special", callback_data=f"battle_act_{battle_id}_special"),
-                 InlineKeyboardButton("🌀 Technique", callback_data=f"battle_act_{battle_id}_technique")],
-                [InlineKeyboardButton("🌐 Domain", callback_data=f"battle_act_{battle_id}_domain"),
-                 InlineKeyboardButton("🏃 Run", callback_data=f"battle_act_{battle_id}_run")]
+                [InlineKeyboardButton(text="⚔️ Attack", callback_data=f"battle_act_{battle_id}_attack"),
+                 InlineKeyboardButton(text="🛡️ Defend", callback_data=f"battle_act_{battle_id}_defend")],
+                [InlineKeyboardButton(text="💥 Special", callback_data=f"battle_act_{battle_id}_special"),
+                 InlineKeyboardButton(text="🌀 Technique", callback_data=f"battle_act_{battle_id}_technique")],
+                [InlineKeyboardButton(text="🌐 Domain", callback_data=f"battle_act_{battle_id}_domain"),
+                 InlineKeyboardButton(text="🏃 Run", callback_data=f"battle_act_{battle_id}_run")]
             ])
 
             char_name = player.get('character_name') or "You"
@@ -822,7 +827,7 @@ async def battle_action_cb(callback: types.CallbackQuery):
                 await callback.answer("Player not found!", show_alert=True)
                 return
 
-            # Get enemy stats from battle record (we stored them)
+            # Enemy stats from battle record
             enemy_hp = battle['current_hp2']
             enemy_name = battle['enemy_name']
             enemy_rank = battle['enemy_rank']
@@ -837,18 +842,15 @@ async def battle_action_cb(callback: types.CallbackQuery):
             player_atk = player['atk']
             player_def = player['def']
 
-            # Initialize response
             resp = ""
             keyboard = None
 
             # Process action
             if action == "attack":
-                # Calculate damage (simple)
                 dmg = max(1, int(player_atk * random.uniform(0.8, 1.2)))
                 enemy_hp_new = max(0, enemy_hp - dmg)
                 await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", enemy_hp_new, battle_id)
 
-                # Enemy counter-attack
                 enemy_dmg = max(1, int(enemy_atk * random.uniform(0.5, 0.9)))
                 player_hp_new = max(0, player_hp - enemy_dmg)
                 await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", player_hp_new, battle_id)
@@ -864,7 +866,6 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     f"━━━━━━━━━━━━━━━━━━━\n"
                 )
 
-                # Check win/lose
                 if enemy_hp_new <= 0:
                     await conn.execute("""
                         UPDATE players SET yen = yen + $1, wins = wins + 1, xp = xp + $2
@@ -891,13 +892,7 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     return
 
             elif action == "defend":
-                # Reduce next enemy damage by 50% for this turn (we store a flag)
-                # We'll implement simple: enemy deals half damage on their turn.
-                # Actually we need to track defend flag. We'll store in battle as extra col.
-                # For simplicity, we'll just set a variable in the battle row.
-                await conn.execute("UPDATE battles SET defend_flag = TRUE WHERE id = $1", battle_id)
-                # Enemy still attacks but with reduced damage
-                enemy_dmg = max(1, int(enemy_atk * random.uniform(0.2, 0.4)))  # half damage
+                enemy_dmg = max(1, int(enemy_atk * random.uniform(0.2, 0.4)))
                 player_hp_new = max(0, player_hp - enemy_dmg)
                 await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", player_hp_new, battle_id)
 
@@ -919,17 +914,14 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     return
 
             elif action == "special":
-                # Check CE
                 if player_ce < 30:
                     await callback.answer("Not enough CE! (Need 30)", show_alert=True)
                     return
-                # Spend CE
                 await conn.execute("UPDATE players SET ce = ce - 30 WHERE user_id = $1", player['user_id'])
                 dmg = max(1, int(player_atk * random.uniform(1.5, 2.5)))
                 enemy_hp_new = max(0, enemy_hp - dmg)
                 await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", enemy_hp_new, battle_id)
 
-                # Enemy counter
                 enemy_dmg = max(1, int(enemy_atk * random.uniform(0.6, 1.0)))
                 player_hp_new = max(0, player_hp - enemy_dmg)
                 await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", player_hp_new, battle_id)
@@ -944,7 +936,6 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     f"❤️ Your HP: {player_hp_new}\n"
                 )
                 if enemy_hp_new <= 0:
-                    # reward
                     await conn.execute("""
                         UPDATE players SET yen = yen + $1, wins = wins + 1, xp = xp + $2
                         WHERE user_id = $3
@@ -959,18 +950,15 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     return
 
             elif action == "technique":
-                # List learned techniques and let them choose via another callback? We'll simplify: use first technique.
                 techniques = player.get('techniques') or []
                 if not techniques:
                     await callback.answer("You haven't learned any techniques! Buy and /learn first.", show_alert=True)
                     return
-                # Pick a random technique from learned
                 tech_name = random.choice(techniques)
                 tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", tech_name)
                 if not tech:
                     await callback.answer("Technique data error.", show_alert=True)
                     return
-                # Check CE
                 if player_ce < tech['ce_cost']:
                     await callback.answer(f"Not enough CE! Need {tech['ce_cost']}", show_alert=True)
                     return
@@ -979,7 +967,6 @@ async def battle_action_cb(callback: types.CallbackQuery):
                 enemy_hp_new = max(0, enemy_hp - dmg)
                 await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", enemy_hp_new, battle_id)
 
-                # Enemy counter
                 enemy_dmg = max(1, int(enemy_atk * random.uniform(0.5, 0.9)))
                 player_hp_new = max(0, player_hp - enemy_dmg)
                 await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", player_hp_new, battle_id)
@@ -1008,12 +995,10 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     return
 
             elif action == "domain":
-                # Check if player has a domain
                 domains = player.get('domains') or []
                 if not domains:
                     await callback.answer("You don't own any Domain! Buy one from /shop.", show_alert=True)
                     return
-                # Use the first domain
                 domain_name = domains[0]
                 domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", domain_name)
                 if not domain:
@@ -1027,12 +1012,18 @@ async def battle_action_cb(callback: types.CallbackQuery):
                 enemy_hp_new = max(0, enemy_hp - dmg)
                 await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", enemy_hp_new, battle_id)
 
+                enemy_dmg = max(1, int(enemy_atk * random.uniform(0.5, 0.9)))
+                player_hp_new = max(0, player_hp - enemy_dmg)
+                await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", player_hp_new, battle_id)
+
                 resp = (
                     f"🌐 **Domain Expansion: {domain_name}**!\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"🔥 Dealt {dmg} damage!\n"
                     f"💀 {enemy_name} HP: {enemy_hp_new}\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"💢 Enemy attacked!\n"
+                    f"❤️ Your HP: {player_hp_new}\n"
                 )
                 if enemy_hp_new <= 0:
                     await conn.execute("""
@@ -1042,12 +1033,6 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     await callback.message.edit_text(f"🎉 **VICTORY!** You obliterated {enemy_name} with your domain!")
                     await callback.answer("Victory!")
                     return
-                # Enemy doesn't counter on domain? Usually they do, but we can add.
-                # For balance, let enemy attack after domain
-                enemy_dmg = max(1, int(enemy_atk * random.uniform(0.5, 0.9)))
-                player_hp_new = max(0, player_hp - enemy_dmg)
-                await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", player_hp_new, battle_id)
-                resp += f"💢 Enemy attacked!\n❤️ Your HP: {player_hp_new}\n"
                 if player_hp_new <= 0:
                     await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
                     await callback.message.edit_text(f"💀 **DEFEAT!**")
@@ -1060,7 +1045,6 @@ async def battle_action_cb(callback: types.CallbackQuery):
                     await callback.answer("Escaped!")
                     return
                 else:
-                    # Enemy attacks
                     enemy_dmg = max(1, int(enemy_atk * random.uniform(0.8, 1.2)))
                     player_hp_new = max(0, player_hp - enemy_dmg)
                     await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", player_hp_new, battle_id)
@@ -1071,20 +1055,18 @@ async def battle_action_cb(callback: types.CallbackQuery):
                         await callback.answer("Defeated!")
                         return
 
-            # If we reach here, battle continues
-            # Build new keyboard
+            # If we reach here, battle continues – rebuild keyboard
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton("⚔️ Attack", callback_data=f"battle_act_{battle_id}_attack"),
-                 InlineKeyboardButton("🛡️ Defend", callback_data=f"battle_act_{battle_id}_defend")],
-                [InlineKeyboardButton("💥 Special", callback_data=f"battle_act_{battle_id}_special"),
-                 InlineKeyboardButton("🌀 Technique", callback_data=f"battle_act_{battle_id}_technique")],
-                [InlineKeyboardButton("🌐 Domain", callback_data=f"battle_act_{battle_id}_domain"),
-                 InlineKeyboardButton("🏃 Run", callback_data=f"battle_act_{battle_id}_run")]
+                [InlineKeyboardButton(text="⚔️ Attack", callback_data=f"battle_act_{battle_id}_attack"),
+                 InlineKeyboardButton(text="🛡️ Defend", callback_data=f"battle_act_{battle_id}_defend")],
+                [InlineKeyboardButton(text="💥 Special", callback_data=f"battle_act_{battle_id}_special"),
+                 InlineKeyboardButton(text="🌀 Technique", callback_data=f"battle_act_{battle_id}_technique")],
+                [InlineKeyboardButton(text="🌐 Domain", callback_data=f"battle_act_{battle_id}_domain"),
+                 InlineKeyboardButton(text="🏃 Run", callback_data=f"battle_act_{battle_id}_run")]
             ])
 
-            # Add HP bars
             hp_bar_player = build_hp_bar(player_hp_new, player_max_hp)
-            hp_bar_enemy = build_hp_bar(enemy_hp_new, battle['enemy_hp'] or enemy_hp_new + 100)  # we need max hp
+            hp_bar_enemy = build_hp_bar(enemy_hp_new, battle['current_hp2'] + enemy_hp_new)  # fallback
 
             final_text = (
                 f"⚔️ **BATTLE**\n"
@@ -1108,7 +1090,7 @@ async def battle_action_cb(callback: types.CallbackQuery):
         print("Battle error:", e)
 
 # ============================================================
-# COMMAND: /challenge (PvP placeholder)
+# COMMAND: /challenge (placeholder)
 # ============================================================
 @dp.message(Command("challenge"))
 async def challenge_cmd(message: types.Message):
