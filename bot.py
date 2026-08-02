@@ -441,15 +441,21 @@ async def char_page_cb(callback: types.CallbackQuery):
     await callback.answer()
     await send_char_page(callback, page)
 
+# ============================================================
+# FIXED char_buy_cb – handles both paid and free correctly
+# ============================================================
 @dp.callback_query(lambda c: c.data.startswith("char_buy_") or c.data.startswith("char_buy_free_"))
 async def char_buy_cb(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    if parts[1] == "buy":
+    data = callback.data
+    parts = data.split("_")
+    # Determine if it's free or paid
+    if parts[1] == "buy" and parts[2] != "free":  # paid
         char_id = int(parts[2])
         free = False
-    else:
+    else:  # free button has 'free' at index 2
         char_id = int(parts[3])
         free = True
+
     user_id = callback.from_user.id
     try:
         async with db_pool.acquire() as conn:
@@ -560,7 +566,7 @@ async def select_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# SHOP
+# SHOP (paginated)
 # ============================================================
 @dp.message(Command("shop"))
 async def shop_cmd(message: types.Message):
@@ -1401,7 +1407,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             await callback.answer()
 
 # ============================================================
-# PVP (unchanged)
+# PVP
 # ============================================================
 @dp.message(Command("pvp"))
 async def pvp_cmd(message: types.Message):
