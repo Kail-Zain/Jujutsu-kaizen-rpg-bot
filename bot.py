@@ -220,7 +220,6 @@ async def start_cmd(message: types.Message):
                 VALUES ($1, $2, $3)
                 ON CONFLICT (user_id) DO UPDATE SET username = $2
             """, user_id, username, chat_id)
-            # Give Yuji for free
             await conn.execute("""
                 INSERT INTO player_characters (player_id, character_name)
                 VALUES ($1, 'Yuji Itadori')
@@ -352,7 +351,7 @@ async def profile_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# CHARACTERS
+# CHARACTERS (with purchase and selection)
 # ============================================================
 @dp.message(Command("characters"))
 async def characters_cmd(message: types.Message):
@@ -527,7 +526,7 @@ async def char_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
 # ============================================================
-# SELECT
+# SELECT (quick select, with ownership check)
 # ============================================================
 @dp.message(Command("select"))
 async def select_cmd(message: types.Message):
@@ -561,7 +560,7 @@ async def select_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# SHOP
+# SHOP (paginated)
 # ============================================================
 @dp.message(Command("shop"))
 async def shop_cmd(message: types.Message):
@@ -628,7 +627,7 @@ async def shop_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
 # ============================================================
-# BUY
+# BUY (with duplicate prevention for domains)
 # ============================================================
 @dp.message(Command("buy"))
 async def buy_cmd(message: types.Message):
@@ -652,21 +651,33 @@ async def buy_cmd(message: types.Message):
                 await message.reply(f"❌ Not enough Yen! You have ¥{player['yen']:,}, need ¥{item['price']:,}.")
                 return
             await conn.execute("UPDATE players SET yen = yen - $1 WHERE user_id = $2", item['price'], user_id)
+
             if item['category'] == 'technique':
-                await conn.execute("UPDATE players SET techniques = array_append(techniques, $1) WHERE user_id = $2",
-                                   item['name'], user_id)
+                techniques = player.get('techniques') or []
+                if item['name'] not in techniques:
+                    await conn.execute("UPDATE players SET techniques = array_append(techniques, $1) WHERE user_id = $2",
+                                       item['name'], user_id)
+                else:
+                    await message.reply(f"⚠️ You already own technique '{item['name']}'.")
+                    return
             elif item['category'] == 'domain':
-                await conn.execute("UPDATE players SET domains = array_append(domains, $1) WHERE user_id = $2",
-                                   item['name'], user_id)
+                domains = player.get('domains') or []
+                if item['name'] not in domains:
+                    await conn.execute("UPDATE players SET domains = array_append(domains, $1) WHERE user_id = $2",
+                                       item['name'], user_id)
+                else:
+                    await message.reply(f"⚠️ You already own domain '{item['name']}'.")
+                    return
             else:
                 await conn.execute("UPDATE players SET bag = array_append(bag, $1) WHERE user_id = $2",
                                    item['name'], user_id)
+
             await message.reply(f"✅ Bought **{item['name']}**!\n💰 Remaining: ¥{player['yen'] - item['price']:,}\n📦 Check /bag")
     except Exception as e:
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# BAG
+# BAG, USE, EQUIP, LEARN, TECHNIQUES
 # ============================================================
 @dp.message(Command("bag"))
 async def bag_cmd(message: types.Message):
@@ -704,9 +715,6 @@ async def bag_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ============================================================
-# USE
-# ============================================================
 @dp.message(Command("use"))
 async def use_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -761,9 +769,6 @@ async def use_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ============================================================
-# EQUIP
-# ============================================================
 @dp.message(Command("equip"))
 async def equip_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -801,16 +806,15 @@ async def equip_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ============================================================
-# LEARN
-# ============================================================
+# --- FIXED LEARN COMMAND ---
 @dp.message(Command("learn"))
 async def learn_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.reply("Usage: /learn \"technique name\"")
         return
-    tech_name = args[1].strip()
+    raw_name = args[1].strip()
+    normalized = " ".join(raw_name.split())  # collapse multiple spaces
     user_id = message.from_user.id
     try:
         async with db_pool.acquire() as conn:
@@ -818,20 +822,40 @@ async def learn_cmd(message: types.Message):
             if not player:
                 await message.reply("Start with /start first!")
                 return
+
             techniques = player.get('techniques') or []
-            if tech_name not in techniques:
-                await message.reply(f"❌ You don't own '{tech_name}'. Buy it from /shop first.")
+            domains = player.get('domains') or []
+
+            # Case‑insensitive, normalized match in techniques
+            matched_tech = None
+            for t in techniques:
+                if t.lower().strip() == normalized.lower():
+                    matched_tech = t
+                    break
+            if matched_tech:
+                await message.reply_animation(
+                    animation=EFFECTS["cursed_energy"],
+                    caption=f"🌀 **{matched_tech}** is ready to use in battle!\nUse the 'Technique' button."
+                )
                 return
-            await message.reply_animation(
-                animation=EFFECTS["cursed_energy"],
-                caption=f"🌀 **{tech_name}** is ready to use in battle!\nUse the 'Technique' button."
-            )
+
+            # Check domains
+            matched_domain = None
+            for d in domains:
+                if d.lower().strip() == normalized.lower():
+                    matched_domain = d
+                    break
+            if matched_domain:
+                await message.reply(
+                    f"🌐 **{matched_domain}** is a Domain Expansion.\n"
+                    f"Use the **'Domain'** button in battle to activate it."
+                )
+                return
+
+            await message.reply(f"❌ You don't own '{normalized}'. Buy it from /shop first.")
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ============================================================
-# TECHNIQUES
-# ============================================================
 @dp.message(Command("techniques"))
 async def techniques_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -1029,7 +1053,7 @@ async def show_battle_slots(message_or_callback, battle_id, player, enemy):
         else:
             await callback.message.edit_text(caption, reply_markup=markup)
 
-# ----- BATTLE SLOT CALLBACKS -----
+# ----- BATTLE SLOT CALLBACKS (FIXED) -----
 @dp.callback_query(lambda c: c.data.startswith("bs_"))
 async def battle_slot_cb(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -1053,7 +1077,12 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                  "atk": battle['enemy_atk'], "def": battle['enemy_def'], "spd": battle['enemy_spd'],
                  "max_hp": battle['enemy_max_hp']}
 
-        queue = battle_queues.get(battle_id, {"slots": [None] * get_max_slots(player['level'])})
+        # Ensure queue exists
+        queue = battle_queues.get(battle_id)
+        if queue is None:
+            max_slots = get_max_slots(player['level'])
+            queue = {"slots": [None] * max_slots}
+            battle_queues[battle_id] = queue
         slots = queue.get("slots", [])
         max_slots = len(slots)
 
@@ -1083,6 +1112,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             queue["slots"] = slots
             battle_queues[battle_id] = queue
             await callback.answer(f"Added {move_type} to slot {empty_index+1}!")
+            # Refresh battle view
             await show_battle_slots(callback, battle_id, player, enemy)
 
         elif action == "remove":
@@ -1108,6 +1138,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             await show_battle_slots(callback, battle_id, player, enemy)
 
         elif action == "execute":
+            # Calculate total CE cost
             total_ce = sum(s.get('ce_cost', 0) for s in slots if s is not None)
             if player['ce'] < total_ce:
                 await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
@@ -1115,8 +1146,10 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             exec_log = []
             total_damage = 0
             defend_flag = False
+            # Deduct CE
             await conn.execute("UPDATE players SET ce = ce - $1 WHERE user_id = $2", total_ce, player['user_id'])
             new_player_ce = player['ce'] - total_ce
+            # Process each slot
             for slot in slots:
                 if slot is None:
                     continue
@@ -1153,8 +1186,10 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                             dmg = max(1, int(player['atk'] * dmg_mult * random.uniform(0.9, 1.1)))
                             total_damage += dmg
                             exec_log.append(f"🌐 {domain_name}: {dmg} damage")
+            # Apply total damage to enemy
             new_enemy_hp = max(0, battle['current_hp2'] - total_damage)
             await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", new_enemy_hp, battle_id)
+            # Enemy counter (unless defend_flag)
             enemy_dmg = 0
             if not defend_flag:
                 enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.5, 0.9)))
@@ -1164,6 +1199,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             new_player_hp = max(0, battle['current_hp1'] - enemy_dmg)
             await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_player_hp, battle_id)
 
+            # Check win/lose
             if new_enemy_hp <= 0:
                 await conn.execute("""
                     UPDATE players SET yen = yen + $1, wins = wins + 1, xp = xp + $2, boss_kills = boss_kills + $3
@@ -1197,6 +1233,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                 await callback.answer("Defeated! 💀")
                 return
 
+            # Battle continues – clear slots, refresh
             for i in range(len(slots)):
                 slots[i] = None
             queue["slots"] = slots
@@ -1205,7 +1242,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             player['ce'] = new_player_ce
             enemy['hp'] = new_enemy_hp
             await show_battle_slots(callback, battle_id, player, enemy)
-            await callback.answer(f"Executed {len([s for s in slots if s is None])} moves!")
+            await callback.answer(f"Executed {len([s for s in slots if s is not None])} moves!")
 
         elif action == "run":
             if random.random() < 0.6:
@@ -1623,7 +1660,7 @@ async def commands_cmd(message: types.Message):
         f"/use \"item\" - Use consumable\n"
         f"/equip \"weapon\" - Equip\n"
         f"/techniques - Your techniques\n"
-        f"/learn \"tech\" - Use technique (already owned)\n"
+        f"/learn \"tech\" - Learn/confirm technique (must own)\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**Missions**\n"
         f"/missions - View all missions\n"
