@@ -56,7 +56,7 @@ EFFECTS = {
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 db_pool = None
-battle_queues = {}  # {battle_id: {"player_id": int, "slots": [move_dict or None]}}
+battle_queues = {}
 
 # ============================================================
 # DATABASE CONNECTION
@@ -526,7 +526,7 @@ async def char_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
 # ============================================================
-# SELECT (quick select, with ownership check)
+# SELECT (quick select)
 # ============================================================
 @dp.message(Command("select"))
 async def select_cmd(message: types.Message):
@@ -560,7 +560,7 @@ async def select_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# SHOP (paginated)
+# SHOP
 # ============================================================
 @dp.message(Command("shop"))
 async def shop_cmd(message: types.Message):
@@ -627,7 +627,7 @@ async def shop_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
 # ============================================================
-# BUY (with duplicate prevention for domains)
+# BUY
 # ============================================================
 @dp.message(Command("buy"))
 async def buy_cmd(message: types.Message):
@@ -806,7 +806,6 @@ async def equip_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# --- FIXED LEARN COMMAND ---
 @dp.message(Command("learn"))
 async def learn_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -814,7 +813,7 @@ async def learn_cmd(message: types.Message):
         await message.reply("Usage: /learn \"technique name\"")
         return
     raw_name = args[1].strip()
-    normalized = " ".join(raw_name.split())  # collapse multiple spaces
+    normalized = " ".join(raw_name.split())
     user_id = message.from_user.id
     try:
         async with db_pool.acquire() as conn:
@@ -822,11 +821,9 @@ async def learn_cmd(message: types.Message):
             if not player:
                 await message.reply("Start with /start first!")
                 return
-
             techniques = player.get('techniques') or []
             domains = player.get('domains') or []
 
-            # Case‑insensitive, normalized match in techniques
             matched_tech = None
             for t in techniques:
                 if t.lower().strip() == normalized.lower():
@@ -839,7 +836,6 @@ async def learn_cmd(message: types.Message):
                 )
                 return
 
-            # Check domains
             matched_domain = None
             for d in domains:
                 if d.lower().strip() == normalized.lower():
@@ -906,7 +902,7 @@ async def enemies_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# BATTLE SYSTEM – SLOT-BASED QUEUE
+# BATTLE SYSTEM – SLOT-BASED QUEUE WITH EFFECTS
 # ============================================================
 @dp.message(Command("battle"))
 async def battle_cmd(message: types.Message):
@@ -975,7 +971,6 @@ async def show_battle_slots(message_or_callback, battle_id, player, enemy):
     queue = battle_queues.get(battle_id, {"slots": [None] * get_max_slots(player['level'])})
     slots = queue.get("slots", [])
     max_slots = len(slots)
-    # Build queue display
     queue_lines = []
     total_ce_cost = 0
     for i, slot in enumerate(slots):
@@ -989,9 +984,7 @@ async def show_battle_slots(message_or_callback, battle_id, player, enemy):
     queue_text = "\n".join(queue_lines)
     ce_remaining = player['ce'] - total_ce_cost
 
-    # Build keyboard with move buttons
     keyboard = []
-    # Row 1: Attack, Defend, Special, Technique, Domain
     row1 = []
     row1.append(InlineKeyboardButton(text="⚔️ Attack (0)", callback_data=f"bs_add_{battle_id}_attack"))
     row1.append(InlineKeyboardButton(text="🛡️ Defend (0)", callback_data=f"bs_add_{battle_id}_defend"))
@@ -999,13 +992,11 @@ async def show_battle_slots(message_or_callback, battle_id, player, enemy):
     row1.append(InlineKeyboardButton(text="🌀 Tech", callback_data=f"bs_tech_{battle_id}"))
     row1.append(InlineKeyboardButton(text="🌐 Domain", callback_data=f"bs_domain_{battle_id}"))
     keyboard.append(row1)
-    # Row 2: Clear, Execute, Run
     row2 = []
     row2.append(InlineKeyboardButton(text="🗑️ Clear", callback_data=f"bs_clear_{battle_id}"))
     row2.append(InlineKeyboardButton(text="▶️ Execute", callback_data=f"bs_execute_{battle_id}"))
     row2.append(InlineKeyboardButton(text="🏃 Run", callback_data=f"bs_run_{battle_id}"))
     keyboard.append(row2)
-    # Remove buttons for filled slots
     remove_buttons = []
     for i, slot in enumerate(slots):
         if slot is not None:
@@ -1053,7 +1044,7 @@ async def show_battle_slots(message_or_callback, battle_id, player, enemy):
         else:
             await callback.message.edit_text(caption, reply_markup=markup)
 
-# ----- BATTLE SLOT CALLBACKS (FIXED) -----
+# ----- BATTLE SLOT CALLBACKS (FULLY FIXED WITH EFFECTS) -----
 @dp.callback_query(lambda c: c.data.startswith("bs_"))
 async def battle_slot_cb(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -1069,15 +1060,22 @@ async def battle_slot_cb(callback: types.CallbackQuery):
         if battle['status'] != 'active':
             await callback.answer("Battle ended.", show_alert=True)
             return
-        player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player1_id'])
-        if not player:
+        player_record = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player1_id'])
+        if not player_record:
             await callback.answer("Player not found!", show_alert=True)
             return
-        enemy = {"name": battle['enemy_name'], "rank": battle['enemy_rank'], "hp": battle['current_hp2'],
-                 "atk": battle['enemy_atk'], "def": battle['enemy_def'], "spd": battle['enemy_spd'],
-                 "max_hp": battle['enemy_max_hp']}
+        player = dict(player_record)
 
-        # Ensure queue exists
+        enemy = {
+            "name": battle['enemy_name'],
+            "rank": battle['enemy_rank'],
+            "hp": battle['current_hp2'],
+            "atk": battle['enemy_atk'],
+            "def": battle['enemy_def'],
+            "spd": battle['enemy_spd'],
+            "max_hp": battle['enemy_max_hp']
+        }
+
         queue = battle_queues.get(battle_id)
         if queue is None:
             max_slots = get_max_slots(player['level'])
@@ -1088,7 +1086,6 @@ async def battle_slot_cb(callback: types.CallbackQuery):
 
         if action == "add":
             move_type = parts[3]
-            # Find first empty slot
             empty_index = -1
             for i, s in enumerate(slots):
                 if s is None:
@@ -1097,7 +1094,6 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             if empty_index == -1:
                 await callback.answer("Queue full! Use Clear or Execute.", show_alert=True)
                 return
-            # Create move dict
             ce_cost = 0
             if move_type == "attack":
                 move = {"type": "attack", "ce_cost": 0}
@@ -1112,7 +1108,6 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             queue["slots"] = slots
             battle_queues[battle_id] = queue
             await callback.answer(f"Added {move_type} to slot {empty_index+1}!")
-            # Refresh battle view
             await show_battle_slots(callback, battle_id, player, enemy)
 
         elif action == "remove":
@@ -1138,26 +1133,34 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             await show_battle_slots(callback, battle_id, player, enemy)
 
         elif action == "execute":
-            # Calculate total CE cost
             total_ce = sum(s.get('ce_cost', 0) for s in slots if s is not None)
             if player['ce'] < total_ce:
                 await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
                 return
+
+            await conn.execute("UPDATE players SET ce = ce - $1 WHERE user_id = $2", total_ce, player['user_id'])
+            new_player_ce = player['ce'] - total_ce
+
             exec_log = []
             total_damage = 0
             defend_flag = False
-            # Deduct CE
-            await conn.execute("UPDATE players SET ce = ce - $1 WHERE user_id = $2", total_ce, player['user_id'])
-            new_player_ce = player['ce'] - total_ce
-            # Process each slot
+            black_flash_triggered = False
+
             for slot in slots:
                 if slot is None:
                     continue
                 move_type = slot.get('type')
                 if move_type == 'attack':
                     dmg = max(1, int(player['atk'] * random.uniform(0.8, 1.2)))
+                    # Black Flash chance for attack (1%)
+                    if random.random() < 0.01:
+                        dmg = int(dmg * 2.5)
+                        black_flash_triggered = True
+                        await callback.message.reply_animation(animation=EFFECTS["black_flash"])
+                        exec_log.append(f"⚡ BLACK FLASH! Attack: {dmg} damage")
+                    else:
+                        exec_log.append(f"⚔️ Attack: {dmg} damage")
                     total_damage += dmg
-                    exec_log.append(f"⚔️ Attack: {dmg} damage")
                 elif move_type == 'defend':
                     defend_flag = True
                     exec_log.append("🛡️ Defend (halves next enemy damage)")
@@ -1172,6 +1175,17 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                         dmg = max(1, int(player['atk'] * tech['damage_multiplier'] * random.uniform(0.9, 1.1)))
                         total_damage += dmg
                         exec_log.append(f"🌀 {tech_name}: {dmg} damage")
+                        # Effect triggers
+                        if "Purple" in tech_name:
+                            await callback.message.reply_animation(animation=EFFECTS["gojo_purple"])
+                        elif "Red" in tech_name:
+                            await callback.message.reply_animation(animation=EFFECTS["gojo_red"])
+                        elif "Blue" in tech_name:
+                            await callback.message.reply_animation(animation=EFFECTS["gojo_blue"])
+                        else:
+                            await callback.message.reply_animation(animation=EFFECTS["cursed_energy"])
+                    else:
+                        exec_log.append(f"❌ {tech_name} not found!")
                 elif move_type == 'domain':
                     domain_name = slot.get('domain_name')
                     domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", domain_name)
@@ -1179,6 +1193,15 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                         dmg = max(1, int(player['atk'] * domain['damage_multiplier'] * random.uniform(0.9, 1.1)))
                         total_damage += dmg
                         exec_log.append(f"🌐 {domain_name}: {dmg} damage")
+                        # Domain Effects
+                        if "Unlimited Void" in domain_name:
+                            await callback.message.reply_animation(animation=EFFECTS["gojo_unlimited_void"])
+                        elif "Malevolent" in domain_name:
+                            await callback.message.reply_animation(animation=EFFECTS["sukuna_domain"])
+                        elif "Mahito" in domain_name or "Self" in domain_name:
+                            await callback.message.reply_animation(animation=EFFECTS["mahito_domain"])
+                        else:
+                            await callback.message.reply_animation(animation=EFFECTS["default_domain"])
                     else:
                         domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", domain_name)
                         if domain_item:
@@ -1186,20 +1209,28 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                             dmg = max(1, int(player['atk'] * dmg_mult * random.uniform(0.9, 1.1)))
                             total_damage += dmg
                             exec_log.append(f"🌐 {domain_name}: {dmg} damage")
-            # Apply total damage to enemy
+                            await callback.message.reply_animation(animation=EFFECTS["default_domain"])
+                        else:
+                            exec_log.append(f"❌ Domain {domain_name} not found!")
+
             new_enemy_hp = max(0, battle['current_hp2'] - total_damage)
             await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", new_enemy_hp, battle_id)
-            # Enemy counter (unless defend_flag)
+
             enemy_dmg = 0
             if not defend_flag:
                 enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.5, 0.9)))
+                exec_log.append(f"💢 Enemy counter‑attack: {enemy_dmg} damage")
             else:
                 enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.2, 0.4)))
+                exec_log.append(f"🛡️ Enemy damage reduced to {enemy_dmg} (Defend)")
                 await conn.execute("UPDATE battles SET defend_flag = FALSE WHERE id = $1", battle_id)
+
             new_player_hp = max(0, battle['current_hp1'] - enemy_dmg)
             await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_player_hp, battle_id)
 
-            # Check win/lose
+            player['hp'] = new_player_hp
+            player['ce'] = new_player_ce
+
             if new_enemy_hp <= 0:
                 await conn.execute("""
                     UPDATE players SET yen = yen + $1, wins = wins + 1, xp = xp + $2, boss_kills = boss_kills + $3
@@ -1207,39 +1238,40 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                 """, battle['enemy_reward_yen'] or 1000, battle['enemy_reward_xp'] or 100,
                   1 if battle['is_boss'] else 0, player['user_id'])
                 await callback.message.reply_animation(animation=EFFECTS["defeat"])
-                await callback.message.edit_text(
+                summary = (
                     f"🎉 **VICTORY!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"Executed moves:\n" + "\n".join(exec_log) +
+                    f"**Battle Log:**\n" + "\n".join(exec_log) +
                     f"\n━━━━━━━━━━━━━━━━━━━\n"
-                    f"You defeated **{battle['enemy_name']}**!\n"
+                    f"❤️ Your HP: {new_player_hp}  |  💀 {enemy['name']} HP: 0\n"
                     f"💰 +¥{battle['enemy_reward_yen'] or 1000}\n"
                     f"⭐ +{battle['enemy_reward_xp'] or 100} XP"
                 )
+                await callback.message.edit_text(summary)
                 del battle_queues[battle_id]
                 await callback.answer("Victory! 🎉")
                 return
+
             if new_player_hp <= 0:
                 await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
                 await callback.message.reply_animation(animation=EFFECTS["defeat"])
-                await callback.message.edit_text(
+                summary = (
                     f"💀 **DEFEAT!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"Executed moves:\n" + "\n".join(exec_log) +
+                    f"**Battle Log:**\n" + "\n".join(exec_log) +
                     f"\n━━━━━━━━━━━━━━━━━━━\n"
-                    f"You were defeated by **{battle['enemy_name']}**!"
+                    f"❤️ Your HP: 0  |  💀 {enemy['name']} HP: {new_enemy_hp}\n"
+                    f"Better luck next time!"
                 )
+                await callback.message.edit_text(summary)
                 del battle_queues[battle_id]
                 await callback.answer("Defeated! 💀")
                 return
 
-            # Battle continues – clear slots, refresh
             for i in range(len(slots)):
                 slots[i] = None
             queue["slots"] = slots
             battle_queues[battle_id] = queue
-            player['hp'] = new_player_hp
-            player['ce'] = new_player_ce
             enemy['hp'] = new_enemy_hp
             await show_battle_slots(callback, battle_id, player, enemy)
             await callback.answer(f"Executed {len([s for s in slots if s is not None])} moves!")
@@ -1256,7 +1288,11 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                 if new_hp <= 0:
                     await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
                     await callback.message.reply_animation(animation=EFFECTS["defeat"])
-                    await callback.message.edit_text("💀 **DEFEAT!**")
+                    await callback.message.edit_text(
+                        f"💀 **DEFEAT!**\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"Failed to escape and was defeated by {enemy['name']}!"
+                    )
                     del battle_queues[battle_id]
                     await callback.answer("Defeated! 💀")
                     return
@@ -1365,7 +1401,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             await callback.answer()
 
 # ============================================================
-# PVP
+# PVP (unchanged)
 # ============================================================
 @dp.message(Command("pvp"))
 async def pvp_cmd(message: types.Message):
