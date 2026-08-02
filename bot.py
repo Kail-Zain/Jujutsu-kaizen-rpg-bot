@@ -2,7 +2,7 @@ import asyncio
 import os
 import random
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -21,12 +21,12 @@ if not BOT_TOKEN or not DATABASE_URL:
 # ============================================================
 # OWNER & BRANDING
 # ============================================================
-ADMIN_IDS = [8609946980]
+OWNER_ID = 8609946980
 OWNER_NAME = "𝕄𝕒𝕩𝕨𝕖𝕝𝕝-𝟜𝟟"
 YEN_PURCHASE_INFO = f"💰 **Buy Yen** — Contact {OWNER_NAME} directly."
 
 # ============================================================
-# EFFECT ASSETS (ALL – NO PLACEHOLDERS)
+# EFFECT ASSETS (ALL REAL – ZERO PLACEHOLDERS)
 # ============================================================
 EFFECTS = {
     "yuji_attack": "https://files.catbox.moe/zw09u9.mp4",
@@ -48,6 +48,15 @@ EFFECTS = {
     "gojo_unlimited_void": "https://files.catbox.moe/yixtqh.jpg",
     "curse_evolution": "https://files.catbox.moe/b4u7eh.jpg",
     "default_domain": "https://files.catbox.moe/anryee.jpg",
+    "victory_normal": "https://files.catbox.moe/wdzn1a.jpg",
+    "victory_boss": "https://files.catbox.moe/byndj2.jpg",
+    "awakening": "https://files.catbox.moe/ath91a.jpg",
+    "clan_raid": "https://files.catbox.moe/0fr9g2.jpg",
+    "story_boss": "https://files.catbox.moe/13bc2a.jpg",
+    "heavenly_restriction": "https://files.catbox.moe/sgtc5w.jpg",
+    "achievement": "https://files.catbox.moe/bfrhbv.jpg",
+    "dungeon_clear": "https://files.catbox.moe/wq4cu7.jpg",
+    "tower_clear": "https://files.catbox.moe/wq4cu7.jpg",
 }
 
 # ============================================================
@@ -57,6 +66,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 db_pool = None
 battle_queues = {}
+ongoing_battles = {}
 
 # ============================================================
 # DATABASE CONNECTION
@@ -158,55 +168,31 @@ def format_slot(slot, index):
         return f"Slot {index+1}: 🌐 {slot.get('domain_name')} ({ce_cost} CE)"
     return f"Slot {index+1}: ?"
 
-# ============================================================
-# GUIDE COMMAND
-# ============================================================
-@dp.message(Command("guide"))
-async def guide_cmd(message: types.Message):
-    guide_text = (
-        "📖 **Cursed Chronicles – Game Guide**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "⚔️ **BATTLE SYSTEM**\n"
-        "• You have a **move queue** of up to 10 slots.\n"
-        "• The number of slots depends on your **Level**.\n"
-        "• Each turn, fill slots with moves (Attack, Defend, Special, Technique, Domain).\n"
-        "• Each move costs **Cursed Energy (CE)** – displayed on the button.\n"
-        "• Click **Execute** to perform all queued moves in order.\n"
-        "• The enemy counter‑attacks after your whole combo.\n"
-        "• **CE** regenerates slowly outside battle (coming soon).\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🎭 **CHARACTERS**\n"
-        "• Start with **Yuji Itadori** for free.\n"
-        "• Buy other characters (Gojo, Sukuna, etc.) via `/characters`.\n"
-        "• Each character has unique stats and techniques.\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🏪 **SHOP & INVENTORY**\n"
-        "• Buy weapons, elixirs, techniques, and domains.\n"
-        "• Equip weapons to boost ATK.\n"
-        "• Use elixirs to gain XP and restore HP/CE.\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📋 **MISSIONS**\n"
-        "• Daily, Weekly, Monthly and Clan missions.\n"
-        "• Claim rewards with `/daily`.\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "💰 **YEN**\n"
-        "• Earn Yen by winning battles and completing missions.\n"
-        "• Buy Yen directly from the owner: {OWNER_NAME}.\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "👑 **PVP**\n"
-        "• Challenge other players with `/pvp @username`.\n"
-        "• Accept with `/pvp_accept battle_id`.\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🌟 **AWAKENING & PRESTIGE** (coming soon)\n"
-        "• Unlock special abilities and reset for higher potential.\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 **Owner**: {OWNER_NAME}\n"
-        "Type /commands for the full command list."
-    )
-    await message.reply(guide_text)
+def scale_enemy_to_level(enemy, level):
+    if not enemy:
+        return enemy
+    enemy = dict(enemy)
+    enemy['hp'] = enemy.get('hp', 100) + (level * 50)
+    enemy['atk'] = enemy.get('atk', 10) + (level * 3)
+    enemy['def'] = enemy.get('def', 10) + (level * 2)
+    enemy['spd'] = enemy.get('spd', 10) + (level * 1)
+    enemy['reward_yen'] = (enemy.get('reward_yen', 500) or 500) + (level * 100)
+    enemy['reward_xp'] = (enemy.get('reward_xp', 50) or 50) + (level * 25)
+    return enemy
+
+async def is_owner(user_id):
+    return user_id == OWNER_ID
+
+async def is_admin(user_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT role FROM admins WHERE user_id = $1", user_id)
+        return row is not None and row['role'] in ('owner', 'admin')
+
+async def can_manage_yen(user_id):
+    return user_id == OWNER_ID
 
 # ============================================================
-# COMMAND /start
+# COMMAND: /start
 # ============================================================
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
@@ -225,6 +211,7 @@ async def start_cmd(message: types.Message):
                 VALUES ($1, 'Yuji Itadori')
                 ON CONFLICT DO NOTHING
             """, user_id)
+            await conn.execute("UPDATE players SET in_battle = FALSE WHERE user_id = $1", user_id)
     except Exception as e:
         print("start db error:", e)
 
@@ -273,9 +260,6 @@ async def start_cmd(message: types.Message):
         )
     await message.reply(msg, reply_markup=keyboard)
 
-# ============================================================
-# WELCOME CALLBACK
-# ============================================================
 @dp.callback_query(lambda c: c.data.startswith("welcome_"))
 async def welcome_cb(callback: types.CallbackQuery):
     action = callback.data.replace("welcome_", "")
@@ -290,7 +274,61 @@ async def welcome_cb(callback: types.CallbackQuery):
     elif action == "buy_yen": await send_owner_info(callback.message)
 
 # ============================================================
-# PROFILE
+# COMMAND: /status
+# ============================================================
+@dp.message(Command("status"))
+async def status_cmd(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in ongoing_battles:
+        battle_id = ongoing_battles[user_id]
+        async with db_pool.acquire() as conn:
+            battle = await conn.fetchrow("SELECT * FROM battles WHERE id = $1 AND status = 'active'", battle_id)
+            if battle:
+                await message.reply(
+                    f"⚔️ **You have an ongoing battle!**\n"
+                    f"ID: {battle_id}\n"
+                    f"Enemy: {battle['enemy_name']}\n"
+                    f"Your HP: {battle['current_hp1']}\n"
+                    f"Enemy HP: {battle['current_hp2']}\n"
+                    f"Type `/resume {battle_id}` to continue."
+                )
+                return
+    await message.reply("✅ No ongoing battle. Start one with `/battle` or `/boss`.")
+
+# ============================================================
+# COMMAND: /resume
+# ============================================================
+@dp.message(Command("resume"))
+async def resume_cmd(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("Usage: /resume battle_id")
+        return
+    battle_id = int(args[1])
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        battle = await conn.fetchrow("SELECT * FROM battles WHERE id = $1 AND player1_id = $2 AND status = 'active'",
+                                     battle_id, user_id)
+        if not battle:
+            await message.reply("❌ Battle not found or already finished.")
+            return
+        player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
+        enemy = {
+            "name": battle['enemy_name'],
+            "rank": battle['enemy_rank'],
+            "hp": battle['current_hp2'],
+            "atk": battle['enemy_atk'],
+            "def": battle['enemy_def'],
+            "spd": battle['enemy_spd'],
+            "max_hp": battle['enemy_max_hp']
+        }
+        if battle_id not in battle_queues:
+            max_slots = get_max_slots(player['level'])
+            battle_queues[battle_id] = {"slots": [None] * max_slots}
+        await show_battle_slots(message, battle_id, player, enemy)
+
+# ============================================================
+# COMMAND: /profile
 # ============================================================
 @dp.message(Command("profile"))
 async def profile_cmd(message: types.Message):
@@ -313,6 +351,8 @@ async def profile_cmd(message: types.Message):
             if player.get('clan_id'):
                 clan = await conn.fetchrow("SELECT name FROM clans WHERE id = $1", player['clan_id'])
                 if clan: clan_name = clan['name']
+            restriction = player.get('restriction') or "None"
+            curse_rank = player.get('curse_rank') or "None"
             rep_str = safe_rep_str(player.get('reputation'))
             caption = (
                 f"👤 **Cursed Chronicle**\n"
@@ -338,11 +378,13 @@ async def profile_cmd(message: types.Message):
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"💎 Prestige: {player['prestige']} (Lv.{player['prestige_level']})\n"
                 f"🏟️ Arena Rank: {player['arena_rank']}\n"
+                f"🔒 Restriction: {restriction}\n"
+                f"👹 Curse Rank: {curse_rank}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"{YEN_PURCHASE_INFO}"
             )
             if awakening != "None":
-                await message.reply_animation(animation=EFFECTS["cursed_energy"], caption=caption)
+                await message.reply_animation(animation=EFFECTS["awakening"], caption=caption)
             elif image_url:
                 await message.reply_photo(photo=image_url, caption=caption)
             else:
@@ -351,7 +393,7 @@ async def profile_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# CHARACTERS (with purchase and selection)
+# CHARACTERS COMMAND (PAGINATED)
 # ============================================================
 @dp.message(Command("characters"))
 async def characters_cmd(message: types.Message):
@@ -441,18 +483,14 @@ async def char_page_cb(callback: types.CallbackQuery):
     await callback.answer()
     await send_char_page(callback, page)
 
-# ============================================================
-# FIXED char_buy_cb – handles both paid and free correctly
-# ============================================================
 @dp.callback_query(lambda c: c.data.startswith("char_buy_") or c.data.startswith("char_buy_free_"))
 async def char_buy_cb(callback: types.CallbackQuery):
     data = callback.data
     parts = data.split("_")
-    # Determine if it's free or paid
-    if parts[1] == "buy" and parts[2] != "free":  # paid
+    if parts[1] == "buy" and parts[2] != "free":
         char_id = int(parts[2])
         free = False
-    else:  # free button has 'free' at index 2
+    else:
         char_id = int(parts[3])
         free = True
 
@@ -531,9 +569,6 @@ async def char_select_cb(callback: types.CallbackQuery):
 async def char_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
-# ============================================================
-# SELECT (quick select)
-# ============================================================
 @dp.message(Command("select"))
 async def select_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -566,7 +601,7 @@ async def select_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# SHOP (paginated)
+# SHOP COMMAND (PAGINATED)
 # ============================================================
 @dp.message(Command("shop"))
 async def shop_cmd(message: types.Message):
@@ -633,7 +668,7 @@ async def shop_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
 # ============================================================
-# BUY
+# BUY COMMAND
 # ============================================================
 @dp.message(Command("buy"))
 async def buy_cmd(message: types.Message):
@@ -683,7 +718,7 @@ async def buy_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# BAG, USE, EQUIP, LEARN, TECHNIQUES
+# BAG COMMAND
 # ============================================================
 @dp.message(Command("bag"))
 async def bag_cmd(message: types.Message):
@@ -721,6 +756,9 @@ async def bag_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
+# ============================================================
+# USE COMMAND
+# ============================================================
 @dp.message(Command("use"))
 async def use_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -775,6 +813,9 @@ async def use_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
+# ============================================================
+# EQUIP COMMAND
+# ============================================================
 @dp.message(Command("equip"))
 async def equip_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -812,6 +853,9 @@ async def equip_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
+# ============================================================
+# LEARN COMMAND
+# ============================================================
 @dp.message(Command("learn"))
 async def learn_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -858,6 +902,9 @@ async def learn_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
+# ============================================================
+# TECHNIQUES COMMAND
+# ============================================================
 @dp.message(Command("techniques"))
 async def techniques_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -883,7 +930,7 @@ async def techniques_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# ENEMIES
+# ENEMIES COMMAND
 # ============================================================
 @dp.message(Command("enemies"))
 async def enemies_cmd(message: types.Message):
@@ -908,21 +955,26 @@ async def enemies_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# BATTLE SYSTEM – SLOT-BASED QUEUE WITH EFFECTS
+# BATTLE SYSTEM
 # ============================================================
 @dp.message(Command("battle"))
 async def battle_cmd(message: types.Message):
     user_id = message.from_user.id
+    if user_id in ongoing_battles:
+        await message.reply("⚠️ You already have an ongoing battle! Use `/status` or `/resume`.")
+        return
     try:
         async with db_pool.acquire() as conn:
             player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
             if not player:
                 await message.reply("Start with /start first!")
                 return
+            level = player['level']
             enemy = await conn.fetchrow("SELECT * FROM enemies WHERE is_boss = FALSE ORDER BY RANDOM() LIMIT 1")
             if not enemy:
                 await message.reply("No enemies available!")
                 return
+            scaled_enemy = scale_enemy_to_level(enemy, level)
             await message.reply_animation(animation=EFFECTS["versus"])
             battle_id = await conn.fetchval("""
                 INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
@@ -930,12 +982,15 @@ async def battle_cmd(message: types.Message):
                                      is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE, $10, $11, $12)
                 RETURNING id
-            """, message.chat.id, user_id, player['hp'], enemy['hp'], 
-               enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
-               enemy.get('reward_yen', 1000), enemy.get('reward_xp', 100), enemy['hp'])
+            """, message.chat.id, user_id, player['hp'], scaled_enemy['hp'], 
+               scaled_enemy['name'], scaled_enemy['rank'], scaled_enemy['atk'], 
+               scaled_enemy['def'], scaled_enemy['spd'],
+               scaled_enemy.get('reward_yen', 1000), scaled_enemy.get('reward_xp', 100), 
+               scaled_enemy['hp'])
+            ongoing_battles[user_id] = battle_id
             max_slots = get_max_slots(player['level'])
             battle_queues[battle_id] = {"player_id": user_id, "slots": [None] * max_slots}
-            await show_battle_slots(message, battle_id, player, enemy)
+            await show_battle_slots(message, battle_id, player, scaled_enemy)
     except Exception as e:
         await message.reply(f"Error starting battle: {e}")
 
@@ -947,6 +1002,9 @@ async def boss_cmd(message: types.Message):
         return
     boss_name = args[1].strip()
     user_id = message.from_user.id
+    if user_id in ongoing_battles:
+        await message.reply("⚠️ You already have an ongoing battle! Use `/status` or `/resume`.")
+        return
     try:
         async with db_pool.acquire() as conn:
             player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
@@ -957,6 +1015,8 @@ async def boss_cmd(message: types.Message):
             if not enemy:
                 await message.reply(f"Boss '{boss_name}' not found.")
                 return
+            level = player['level']
+            scaled_enemy = scale_enemy_to_level(enemy, level)
             await message.reply_animation(animation=EFFECTS["versus"])
             battle_id = await conn.fetchval("""
                 INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
@@ -964,12 +1024,15 @@ async def boss_cmd(message: types.Message):
                                      is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10, $11, $12)
                 RETURNING id
-            """, message.chat.id, user_id, player['hp'], enemy['hp'], 
-               enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
-               enemy.get('reward_yen', 5000), enemy.get('reward_xp', 500), enemy['hp'])
+            """, message.chat.id, user_id, player['hp'], scaled_enemy['hp'], 
+               scaled_enemy['name'], scaled_enemy['rank'], scaled_enemy['atk'], 
+               scaled_enemy['def'], scaled_enemy['spd'],
+               scaled_enemy.get('reward_yen', 5000), scaled_enemy.get('reward_xp', 500), 
+               scaled_enemy['hp'])
+            ongoing_battles[user_id] = battle_id
             max_slots = get_max_slots(player['level'])
             battle_queues[battle_id] = {"player_id": user_id, "slots": [None] * max_slots}
-            await show_battle_slots(message, battle_id, player, enemy)
+            await show_battle_slots(message, battle_id, player, scaled_enemy)
     except Exception as e:
         await message.reply(f"Error: {e}")
 
@@ -991,17 +1054,19 @@ async def show_battle_slots(message_or_callback, battle_id, player, enemy):
     ce_remaining = player['ce'] - total_ce_cost
 
     keyboard = []
-    row1 = []
-    row1.append(InlineKeyboardButton(text="⚔️ Attack (0)", callback_data=f"bs_add_{battle_id}_attack"))
-    row1.append(InlineKeyboardButton(text="🛡️ Defend (0)", callback_data=f"bs_add_{battle_id}_defend"))
-    row1.append(InlineKeyboardButton(text="💥 Special (30)", callback_data=f"bs_add_{battle_id}_special"))
-    row1.append(InlineKeyboardButton(text="🌀 Tech", callback_data=f"bs_tech_{battle_id}"))
-    row1.append(InlineKeyboardButton(text="🌐 Domain", callback_data=f"bs_domain_{battle_id}"))
+    row1 = [
+        InlineKeyboardButton(text="⚔️ Attack (0)", callback_data=f"bs_add_{battle_id}_attack"),
+        InlineKeyboardButton(text="🛡️ Defend (0)", callback_data=f"bs_add_{battle_id}_defend"),
+        InlineKeyboardButton(text="💥 Special (30)", callback_data=f"bs_add_{battle_id}_special"),
+        InlineKeyboardButton(text="🌀 Tech", callback_data=f"bs_tech_{battle_id}"),
+        InlineKeyboardButton(text="🌐 Domain", callback_data=f"bs_domain_{battle_id}")
+    ]
     keyboard.append(row1)
-    row2 = []
-    row2.append(InlineKeyboardButton(text="🗑️ Clear", callback_data=f"bs_clear_{battle_id}"))
-    row2.append(InlineKeyboardButton(text="▶️ Execute", callback_data=f"bs_execute_{battle_id}"))
-    row2.append(InlineKeyboardButton(text="🏃 Run", callback_data=f"bs_run_{battle_id}"))
+    row2 = [
+        InlineKeyboardButton(text="🗑️ Clear", callback_data=f"bs_clear_{battle_id}"),
+        InlineKeyboardButton(text="▶️ Execute", callback_data=f"bs_execute_{battle_id}"),
+        InlineKeyboardButton(text="🏃 Run", callback_data=f"bs_run_{battle_id}")
+    ]
     keyboard.append(row2)
     remove_buttons = []
     for i, slot in enumerate(slots):
@@ -1050,7 +1115,9 @@ async def show_battle_slots(message_or_callback, battle_id, player, enemy):
         else:
             await callback.message.edit_text(caption, reply_markup=markup)
 
-# ----- BATTLE SLOT CALLBACKS (FULLY FIXED WITH EFFECTS) -----
+# ============================================================
+# BATTLE CALLBACK (FULL)
+# ============================================================
 @dp.callback_query(lambda c: c.data.startswith("bs_"))
 async def battle_slot_cb(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -1100,7 +1167,6 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             if empty_index == -1:
                 await callback.answer("Queue full! Use Clear or Execute.", show_alert=True)
                 return
-            ce_cost = 0
             if move_type == "attack":
                 move = {"type": "attack", "ce_cost": 0}
             elif move_type == "defend":
@@ -1158,7 +1224,6 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                 move_type = slot.get('type')
                 if move_type == 'attack':
                     dmg = max(1, int(player['atk'] * random.uniform(0.8, 1.2)))
-                    # Black Flash chance for attack (1%)
                     if random.random() < 0.01:
                         dmg = int(dmg * 2.5)
                         black_flash_triggered = True
@@ -1181,7 +1246,6 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                         dmg = max(1, int(player['atk'] * tech['damage_multiplier'] * random.uniform(0.9, 1.1)))
                         total_damage += dmg
                         exec_log.append(f"🌀 {tech_name}: {dmg} damage")
-                        # Effect triggers
                         if "Purple" in tech_name:
                             await callback.message.reply_animation(animation=EFFECTS["gojo_purple"])
                         elif "Red" in tech_name:
@@ -1199,7 +1263,6 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                         dmg = max(1, int(player['atk'] * domain['damage_multiplier'] * random.uniform(0.9, 1.1)))
                         total_damage += dmg
                         exec_log.append(f"🌐 {domain_name}: {dmg} damage")
-                        # Domain Effects
                         if "Unlimited Void" in domain_name:
                             await callback.message.reply_animation(animation=EFFECTS["gojo_unlimited_void"])
                         elif "Malevolent" in domain_name:
@@ -1238,12 +1301,25 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             player['ce'] = new_player_ce
 
             if new_enemy_hp <= 0:
+                is_boss = battle['is_boss']
+                victory_effect = EFFECTS["victory_boss"] if is_boss else EFFECTS["victory_normal"]
+                await callback.message.reply_animation(animation=victory_effect)
                 await conn.execute("""
                     UPDATE players SET yen = yen + $1, wins = wins + 1, xp = xp + $2, boss_kills = boss_kills + $3
                     WHERE user_id = $4
                 """, battle['enemy_reward_yen'] or 1000, battle['enemy_reward_xp'] or 100,
                   1 if battle['is_boss'] else 0, player['user_id'])
-                await callback.message.reply_animation(animation=EFFECTS["defeat"])
+
+                if is_boss and random.random() < 0.10:
+                    await conn.execute("UPDATE players SET awakening = 'Cursed Awakening', awakening_level = 1, awakening_aura = TRUE WHERE user_id = $1", player['user_id'])
+                    await callback.message.reply_animation(animation=EFFECTS["awakening"])
+                    await callback.message.reply("🌀 **Awakening Unlocked!** You have gained a Cursed Awakening!")
+
+                # Check for achievement: First Blood
+                if player['wins'] == 1:
+                    await callback.message.reply_animation(animation=EFFECTS["achievement"])
+                    await callback.message.reply("🏆 **Achievement Unlocked: First Blood!**")
+
                 summary = (
                     f"🎉 **VICTORY!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
@@ -1254,13 +1330,15 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                     f"⭐ +{battle['enemy_reward_xp'] or 100} XP"
                 )
                 await callback.message.edit_text(summary)
+                if user_id in ongoing_battles:
+                    del ongoing_battles[user_id]
                 del battle_queues[battle_id]
                 await callback.answer("Victory! 🎉")
                 return
 
             if new_player_hp <= 0:
-                await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
                 await callback.message.reply_animation(animation=EFFECTS["defeat"])
+                await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
                 summary = (
                     f"💀 **DEFEAT!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
@@ -1270,6 +1348,8 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                     f"Better luck next time!"
                 )
                 await callback.message.edit_text(summary)
+                if user_id in ongoing_battles:
+                    del ongoing_battles[user_id]
                 del battle_queues[battle_id]
                 await callback.answer("Defeated! 💀")
                 return
@@ -1285,6 +1365,8 @@ async def battle_slot_cb(callback: types.CallbackQuery):
         elif action == "run":
             if random.random() < 0.6:
                 await callback.message.edit_text("🏃 You successfully escaped!")
+                if user_id in ongoing_battles:
+                    del ongoing_battles[user_id]
                 del battle_queues[battle_id]
                 await callback.answer("Escaped! 🏃")
             else:
@@ -1296,9 +1378,10 @@ async def battle_slot_cb(callback: types.CallbackQuery):
                     await callback.message.reply_animation(animation=EFFECTS["defeat"])
                     await callback.message.edit_text(
                         f"💀 **DEFEAT!**\n"
-                        f"━━━━━━━━━━━━━━━━━━━\n"
                         f"Failed to escape and was defeated by {enemy['name']}!"
                     )
+                    if user_id in ongoing_battles:
+                        del ongoing_battles[user_id]
                     del battle_queues[battle_id]
                     await callback.answer("Defeated! 💀")
                     return
@@ -1407,7 +1490,7 @@ async def battle_slot_cb(callback: types.CallbackQuery):
             await callback.answer()
 
 # ============================================================
-# PVP
+# PVP COMMANDS
 # ============================================================
 @dp.message(Command("pvp"))
 async def pvp_cmd(message: types.Message):
@@ -1574,7 +1657,7 @@ async def pvp_action_cb(callback: types.CallbackQuery):
         await callback.answer(f"PVP error: {e}", show_alert=True)
 
 # ============================================================
-# MISSIONS
+# MISSIONS COMMANDS
 # ============================================================
 @dp.message(Command("missions"))
 async def missions_cmd(message: types.Message):
@@ -1652,18 +1735,267 @@ async def daily_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# OWNER INFO & BUY YEN
+# ADMIN COMMANDS
+# ============================================================
+@dp.message(Command("addadmin"))
+async def add_admin_cmd(message: types.Message):
+    if not await is_owner(message.from_user.id):
+        await message.reply("❌ Only the owner can add admins!")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("Usage: /addadmin @user")
+        return
+    target = args[1].replace("@", "")
+    try:
+        async with db_pool.acquire() as conn:
+            user = await conn.fetchrow("SELECT user_id FROM players WHERE username ILIKE $1", target)
+            if not user:
+                await message.reply(f"User '{target}' not found.")
+                return
+            await conn.execute("INSERT INTO admins (user_id, role) VALUES ($1, 'admin') ON CONFLICT DO NOTHING", user['user_id'])
+            await message.reply(f"✅ Added {target} as an admin.")
+    except Exception as e:
+        await message.reply(f"Error: {e}")
+
+@dp.message(Command("removeadmin"))
+async def remove_admin_cmd(message: types.Message):
+    if not await is_owner(message.from_user.id):
+        await message.reply("❌ Only the owner can remove admins!")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("Usage: /removeadmin @user")
+        return
+    target = args[1].replace("@", "")
+    try:
+        async with db_pool.acquire() as conn:
+            user = await conn.fetchrow("SELECT user_id FROM players WHERE username ILIKE $1", target)
+            if not user:
+                await message.reply(f"User '{target}' not found.")
+                return
+            await conn.execute("DELETE FROM admins WHERE user_id = $1", user['user_id'])
+            await message.reply(f"✅ Removed {target} from admins.")
+    except Exception as e:
+        await message.reply(f"Error: {e}")
+
+# ============================================================
+# CLAN COMMANDS
+# ============================================================
+@dp.message(Command("clan"))
+async def clan_cmd(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("Usage:\n/clan create [name]\n/clan join [name]\n/clan info\n/clan leave\n/clan raid")
+        return
+    action = args[1].lower()
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        if action == "create":
+            if len(args) < 3:
+                await message.reply("Usage: /clan create [clan name]")
+                return
+            name = " ".join(args[2:])
+            existing = await conn.fetchrow("SELECT * FROM clans WHERE name ILIKE $1", name)
+            if existing:
+                await message.reply(f"Clan '{name}' already exists.")
+                return
+            await conn.execute("INSERT INTO clans (name, leader_id, member_count) VALUES ($1, $2, 1)", name, user_id)
+            await conn.execute("UPDATE players SET clan_id = (SELECT id FROM clans WHERE name = $1), clan_rank = 'Leader' WHERE user_id = $2", name, user_id)
+            await message.reply(f"✅ Clan '{name}' created! You are the leader.")
+        elif action == "join":
+            if len(args) < 3:
+                await message.reply("Usage: /clan join [clan name]")
+                return
+            name = " ".join(args[2:])
+            clan = await conn.fetchrow("SELECT * FROM clans WHERE name ILIKE $1", name)
+            if not clan:
+                await message.reply(f"Clan '{name}' not found.")
+                return
+            await conn.execute("UPDATE players SET clan_id = $1, clan_rank = 'Member' WHERE user_id = $2", clan['id'], user_id)
+            await conn.execute("UPDATE clans SET member_count = member_count + 1 WHERE id = $1", clan['id'])
+            await message.reply(f"✅ Joined clan '{name}'!")
+        elif action == "info":
+            player = await conn.fetchrow("SELECT clan_id FROM players WHERE user_id = $1", user_id)
+            if not player or not player['clan_id']:
+                await message.reply("You are not in a clan.")
+                return
+            clan = await conn.fetchrow("SELECT * FROM clans WHERE id = $1", player['clan_id'])
+            members = await conn.fetch("SELECT username, clan_rank FROM players WHERE clan_id = $1", clan['id'])
+            member_list = "\n".join([f"• {m['username']} ({m['clan_rank']})" for m in members])
+            await message.reply(
+                f"🏛️ **Clan: {clan['name']}**\n"
+                f"Leader: {clan['leader_id']}\n"
+                f"Members: {clan['member_count']}\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"{member_list}"
+            )
+        elif action == "leave":
+            player = await conn.fetchrow("SELECT clan_id, clan_rank FROM players WHERE user_id = $1", user_id)
+            if not player or not player['clan_id']:
+                await message.reply("You are not in a clan.")
+                return
+            if player['clan_rank'] == 'Leader':
+                await message.reply("You cannot leave as leader. Transfer leadership first or disband.")
+                return
+            await conn.execute("UPDATE clans SET member_count = member_count - 1 WHERE id = $1", player['clan_id'])
+            await conn.execute("UPDATE players SET clan_id = NULL, clan_rank = 'Member' WHERE user_id = $1", user_id)
+            await message.reply("✅ You left the clan.")
+        elif action == "raid":
+            player = await conn.fetchrow("SELECT clan_id FROM players WHERE user_id = $1", user_id)
+            if not player or not player['clan_id']:
+                await message.reply("You must be in a clan to start a raid.")
+                return
+            await message.reply_animation(animation=EFFECTS["clan_raid"])
+            await message.reply(
+                f"👑 **Clan Raid Started!**\n"
+                f"All clan members can participate!\n"
+                f"Use `/raid_attack` to deal damage.\n"
+                f"Shared HP bar is coming soon."
+            )
+        else:
+            await message.reply("Unknown action. Use create, join, info, leave, or raid.")
+
+# ============================================================
+# AWAKENING, NPC, SHIKIGAMI, STORY, DUNGEON, TOWER, ACHIEVEMENTS
+# ============================================================
+@dp.message(Command("awakening"))
+async def awakening_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        player = await conn.fetchrow("SELECT awakening, awakening_level, awakening_aura FROM players WHERE user_id = $1", user_id)
+        if not player:
+            await message.reply("Start with /start first!")
+            return
+        if player['awakening']:
+            await message.reply(
+                f"🌀 **Awakening: {player['awakening']}**\n"
+                f"Level: {player['awakening_level']}\n"
+                f"Aura: {'✅ Active' if player['awakening_aura'] else '❌ Inactive'}\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"Keep fighting to evolve your awakening!"
+            )
+        else:
+            await message.reply(
+                "🌀 **No Awakening Yet**\n"
+                "Awakenings can be triggered by:\n"
+                "• Defeating a boss (10% chance)\n"
+                "• Dropping below 10% HP in battle (5% chance)\n"
+                "• Random luck (1% chance)"
+            )
+
+@dp.message(Command("npc"))
+async def npc_cmd(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("Usage:\n/npc list\n/npc talk [name]")
+        return
+    action = args[1].lower()
+    async with db_pool.acquire() as conn:
+        if action == "list":
+            npcs = await conn.fetch("SELECT * FROM npcs")
+            if not npcs:
+                await message.reply("No NPCs available.")
+                return
+            resp = "🧙 **Available NPCs**\n━━━━━━━━━━━━━━━━━━━\n"
+            for n in npcs:
+                resp += f"• **{n['name']}** – {n['role']}\n"
+            resp += "\nUse `/npc talk [name]` to interact."
+            await message.reply(resp)
+        elif action == "talk":
+            if len(args) < 3:
+                await message.reply("Usage: /npc talk [name]")
+                return
+            name = " ".join(args[2:])
+            npc = await conn.fetchrow("SELECT * FROM npcs WHERE name ILIKE $1", name)
+            if not npc:
+                await message.reply(f"NPC '{name}' not found.")
+                return
+            responses = {
+                "Gojo Satoru": "Hey there, weakling. Want to train? It'll cost you 50 CE.",
+                "Nanami Kento": "I have some overtime quests if you're interested.",
+                "Mei Mei": "Everything has a price, darling. Even my advice.",
+                "Utahime Iori": "I can perform a ritual to heal you. Focus.",
+                "Shoko Ieiri": "Medic here. I can patch you up. At a price.",
+                "Tengen": "The barriers of this world are thin. Seek the truth.",
+            }
+            reply = responses.get(npc['name'], f"{npc['name']}: {npc['description']}")
+            await message.reply(f"🧙 **{npc['name']}** says:\n{reply}")
+
+@dp.message(Command("shikigami"))
+async def shikigami_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        player = await conn.fetchrow("SELECT character_name FROM players WHERE user_id = $1", user_id)
+        if not player or player['character_name'] != 'Megumi Fushiguro':
+            await message.reply("❌ Only Megumi Fushiguro can summon Shikigami.")
+            return
+        shikigami = await conn.fetch("SELECT * FROM shikigami ORDER BY id")
+        if not shikigami:
+            await message.reply("No shikigami available.")
+            return
+        resp = "🌀 **Megumi's Shikigami**\n━━━━━━━━━━━━━━━━━━━\n"
+        for s in shikigami:
+            resp += f"• **{s['name']}**: {s['description']} (CE: {s['ce_cost']})\n"
+        resp += "\nUse `/shikigami summon [name]` in battle."
+        await message.reply(resp)
+
+@dp.message(Command("story"))
+async def story_cmd(message: types.Message):
+    await message.reply_animation(animation=EFFECTS["story_boss"])
+    await message.reply(
+        "📜 **Story Mode**\n"
+        "Chapter 1: The Cursed Womb\n"
+        "Fight through the story to unlock rewards.\n"
+        "More chapters coming soon!"
+    )
+
+@dp.message(Command("dungeon"))
+async def dungeon_cmd(message: types.Message):
+    await message.reply_animation(animation=EFFECTS["dungeon_clear"])
+    await message.reply(
+        "🏰 **Infinite Dungeon**\n"
+        "Floor 1\n"
+        "Defeat enemies to climb deeper.\n"
+        "Rewards scale with floor number."
+    )
+
+@dp.message(Command("tower"))
+async def tower_cmd(message: types.Message):
+    await message.reply_animation(animation=EFFECTS["tower_clear"])
+    await message.reply(
+        "🗼 **Tower Mode**\n"
+        "Floor 1/100\n"
+        "Boss every 10 floors. Clear to earn exclusive titles."
+    )
+
+@dp.message(Command("achievements"))
+async def achievements_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        achievements = await conn.fetch("SELECT * FROM achievements")
+        if not achievements:
+            await message.reply("No achievements available.")
+            return
+        player_achievements = await conn.fetch("SELECT achievement_id FROM player_achievements WHERE player_id = $1", user_id)
+        unlocked = [pa['achievement_id'] for pa in player_achievements]
+        resp = "🏆 **Achievements**\n━━━━━━━━━━━━━━━━━━━\n"
+        for a in achievements:
+            status = "✅" if a['id'] in unlocked else "🔒"
+            resp += f"{status} **{a['name']}** – {a['description']}\n"
+        await message.reply(resp)
+
+# ============================================================
+# OWNER INFO
 # ============================================================
 async def send_owner_info(message: types.Message):
     await message.reply(
         f"👑 **Owner & Developer**\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"Name: {OWNER_NAME}\n"
-        f"ID: {ADMIN_IDS[0]}\n"
+        f"ID: {OWNER_ID}\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 **Purchase Yen**\n"
-        f"Contact {OWNER_NAME} directly to buy Yen.\n"
-        f"Current rates and promotions upon request."
+        f"{YEN_PURCHASE_INFO}"
     )
 
 @dp.message(Command("buyyen"))
@@ -1671,7 +2003,7 @@ async def buyyen_cmd(message: types.Message):
     await send_owner_info(message)
 
 # ============================================================
-# COMMANDS
+# COMMAND: /commands
 # ============================================================
 @dp.message(Command("commands"))
 async def commands_cmd(message: types.Message):
@@ -1679,46 +2011,38 @@ async def commands_cmd(message: types.Message):
         f"📋 **Cursed Chronicles — Command List**\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**General**\n"
-        f"/start - Main menu\n"
-        f"/profile - View your Cursed Chronicle\n"
-        f"/guide - Game guide\n"
-        f"/commands - This list\n"
-        f"/buyyen - Contact owner to purchase Yen\n"
+        f"/start, /profile, /guide, /status, /resume [id], /commands, /buyyen\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**Characters**\n"
-        f"/characters - Browse, buy, and select\n"
-        f"/select \"name\" - Quick select (must own)\n"
+        f"/characters, /select [name]\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**Battle**\n"
-        f"/battle - Fight a curse (slot‑based queue)\n"
-        f"/boss \"name\" - Fight a boss\n"
-        f"/enemies - Enemy list\n"
-        f"/pvp @user - Challenge a player\n"
+        f"/battle, /boss [name], /enemies, /pvp [user], /pvp_accept [id]\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**Shop & Inventory**\n"
-        f"/shop - View items\n"
-        f"/buy \"item\" - Purchase\n"
-        f"/bag - Your items\n"
-        f"/use \"item\" - Use consumable\n"
-        f"/equip \"weapon\" - Equip\n"
-        f"/techniques - Your techniques\n"
-        f"/learn \"tech\" - Learn/confirm technique (must own)\n"
+        f"/shop, /buy [item], /bag, /use [item], /equip [weapon], /techniques, /learn [tech]\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"**Missions**\n"
-        f"/missions - View all missions\n"
-        f"/daily - Claim daily rewards\n"
+        f"**Clans**\n"
+        f"/clan create [name], /clan join [name], /clan info, /clan leave, /clan raid\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"**Owner Commands** (admin only)\n"
+        f"**Advanced**\n"
+        f"/awakening, /npc list, /npc talk [name], /shikigami\n"
+        f"/story, /dungeon, /tower, /achievements\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"**Admin** (owner only)\n"
+        f"/addadmin [user], /removeadmin [user]\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"**Owner** (full access)\n"
         f"/addyen, /removeyen, /addxp, /removexp, /setrank, /addlevel, /removelevel, /recalc"
     )
 
 # ============================================================
-# OWNER COMMANDS
+# OWNER COMMANDS (full)
 # ============================================================
 @dp.message(Command("addyen"))
 async def addyen_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await can_manage_yen(message.from_user.id):
+        await message.reply("❌ Only the owner can manage Yen!")
         return
     args = message.text.split()
     if len(args) < 3:
@@ -1738,8 +2062,8 @@ async def addyen_cmd(message: types.Message):
 
 @dp.message(Command("removeyen"))
 async def removeyen_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await can_manage_yen(message.from_user.id):
+        await message.reply("❌ Only the owner can manage Yen!")
         return
     args = message.text.split()
     if len(args) < 3:
@@ -1759,8 +2083,8 @@ async def removeyen_cmd(message: types.Message):
 
 @dp.message(Command("addxp"))
 async def addxp_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await is_owner(message.from_user.id) and not await is_admin(message.from_user.id):
+        await message.reply("❌ Admin or Owner only!")
         return
     args = message.text.split()
     if len(args) < 3:
@@ -1785,8 +2109,8 @@ async def addxp_cmd(message: types.Message):
 
 @dp.message(Command("removexp"))
 async def removexp_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await is_owner(message.from_user.id) and not await is_admin(message.from_user.id):
+        await message.reply("❌ Admin or Owner only!")
         return
     args = message.text.split()
     if len(args) < 3:
@@ -1811,8 +2135,8 @@ async def removexp_cmd(message: types.Message):
 
 @dp.message(Command("setrank"))
 async def setrank_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await is_owner(message.from_user.id) and not await is_admin(message.from_user.id):
+        await message.reply("❌ Admin or Owner only!")
         return
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
@@ -1832,8 +2156,8 @@ async def setrank_cmd(message: types.Message):
 
 @dp.message(Command("addlevel"))
 async def addlevel_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await is_owner(message.from_user.id) and not await is_admin(message.from_user.id):
+        await message.reply("❌ Admin or Owner only!")
         return
     args = message.text.split()
     if len(args) < 3:
@@ -1857,8 +2181,8 @@ async def addlevel_cmd(message: types.Message):
 
 @dp.message(Command("removelevel"))
 async def removelevel_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await is_owner(message.from_user.id) and not await is_admin(message.from_user.id):
+        await message.reply("❌ Admin or Owner only!")
         return
     args = message.text.split()
     if len(args) < 3:
@@ -1882,8 +2206,8 @@ async def removelevel_cmd(message: types.Message):
 
 @dp.message(Command("recalc"))
 async def recalc_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.reply("❌ Owner only!")
+    if not await is_owner(message.from_user.id) and not await is_admin(message.from_user.id):
+        await message.reply("❌ Admin or Owner only!")
         return
     args = message.text.split()
     try:
