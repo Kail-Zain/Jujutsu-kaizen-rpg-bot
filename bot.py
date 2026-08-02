@@ -2,7 +2,7 @@ import asyncio
 import os
 import random
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 if not BOT_TOKEN or not DATABASE_URL:
     raise ValueError("Missing BOT_TOKEN or DATABASE_URL")
 
@@ -57,21 +56,7 @@ EFFECTS = {
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 db_pool = None
-
-# Temporary storage for battle move queues
-battle_queues = {}
-
-# ============================================================
-# DATABASE CONNECTION
-# ============================================================
-async def on_startup():
-    global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
-    print("✅ Database connected!")
-
-async def on_shutdown():
-    await db_pool.close()
-    print("✅ Database closed!")
+battle_queues = {}  # {battle_id: {"player_id": int, "slots": [move_dict or None]}}
 
 # ============================================================
 # HELPERS
@@ -133,11 +118,84 @@ def safe_rep_str(rep_data):
             return rep_data or "None"
     return "None"
 
-# ============================================================
-# COMMANDS
-# ============================================================
+def get_max_slots(level):
+    if level >= 71: return 10
+    if level >= 51: return 9
+    if level >= 41: return 8
+    if level >= 31: return 7
+    if level >= 21: return 6
+    if level >= 16: return 5
+    if level >= 11: return 4
+    if level >= 6: return 3
+    return 2
 
-# ----- START -----
+def format_slot(slot, index):
+    if slot is None:
+        return f"Slot {index+1}: [ ]"
+    move_type = slot.get('type', 'unknown')
+    ce_cost = slot.get('ce_cost', 0)
+    if move_type == 'attack':
+        return f"Slot {index+1}: ⚔️ Attack ({ce_cost} CE)"
+    elif move_type == 'defend':
+        return f"Slot {index+1}: 🛡️ Defend ({ce_cost} CE)"
+    elif move_type == 'special':
+        return f"Slot {index+1}: 💥 Special ({ce_cost} CE)"
+    elif move_type == 'technique':
+        return f"Slot {index+1}: 🌀 {slot.get('tech_name')} ({ce_cost} CE)"
+    elif move_type == 'domain':
+        return f"Slot {index+1}: 🌐 {slot.get('domain_name')} ({ce_cost} CE)"
+    return f"Slot {index+1}: ?"
+
+# ============================================================
+# GUIDE COMMAND
+# ============================================================
+@dp.message(Command("guide"))
+async def guide_cmd(message: types.Message):
+    guide_text = (
+        "📖 **Cursed Chronicles – Game Guide**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "⚔️ **BATTLE SYSTEM**\n"
+        "• You have a **move queue** of up to 10 slots.\n"
+        "• The number of slots depends on your **Level**.\n"
+        "• Each turn, fill slots with moves (Attack, Defend, Special, Technique, Domain).\n"
+        "• Each move costs **Cursed Energy (CE)** – displayed on the button.\n"
+        "• Click **Execute** to perform all queued moves in order.\n"
+        "• The enemy counter‑attacks after your whole combo.\n"
+        "• **CE** regenerates slowly outside battle (coming soon).\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🎭 **CHARACTERS**\n"
+        "• Start with **Yuji Itadori** for free.\n"
+        "• Buy other characters (Gojo, Sukuna, etc.) via `/characters`.\n"
+        "• Each character has unique stats and techniques.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🏪 **SHOP & INVENTORY**\n"
+        "• Buy weapons, elixirs, techniques, and domains.\n"
+        "• Equip weapons to boost ATK.\n"
+        "• Use elixirs to gain XP and restore HP/CE.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📋 **MISSIONS**\n"
+        "• Daily, Weekly, Monthly and Clan missions.\n"
+        "• Claim rewards with `/daily`.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💰 **YEN**\n"
+        "• Earn Yen by winning battles and completing missions.\n"
+        "• Buy Yen directly from the owner: {OWNER_NAME}.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "👑 **PVP**\n"
+        "• Challenge other players with `/pvp @username`.\n"
+        "• Accept with `/pvp_accept battle_id`.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🌟 **AWAKENING & PRESTIGE** (coming soon)\n"
+        "• Unlock special abilities and reset for higher potential.\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 **Owner**: {OWNER_NAME}\n"
+        "Type /commands for the full command list."
+    )
+    await message.reply(guide_text)
+
+# ============================================================
+# COMMAND /start
+# ============================================================
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -204,7 +262,9 @@ async def start_cmd(message: types.Message):
         )
     await message.reply(msg, reply_markup=keyboard)
 
-# ----- WELCOME CALLBACK -----
+# ============================================================
+# WELCOME CALLBACK
+# ============================================================
 @dp.callback_query(lambda c: c.data.startswith("welcome_"))
 async def welcome_cb(callback: types.CallbackQuery):
     action = callback.data.replace("welcome_", "")
@@ -218,7 +278,9 @@ async def welcome_cb(callback: types.CallbackQuery):
     elif action == "commands": await commands_cmd(callback.message)
     elif action == "buy_yen": await send_owner_info(callback.message)
 
-# ----- PROFILE (ENHANCED) -----
+# ============================================================
+# PROFILE (unchanged but with all stats)
+# ============================================================
 @dp.message(Command("profile"))
 async def profile_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -277,7 +339,9 @@ async def profile_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ----- CHARACTERS (with purchase button) -----
+# ============================================================
+# CHARACTERS (with purchase and ownership)
+# ============================================================
 @dp.message(Command("characters"))
 async def characters_cmd(message: types.Message):
     try:
@@ -306,7 +370,6 @@ async def send_char_page(message_or_callback, page):
             else:
                 user_id = message_or_callback.from_user.id
 
-            # Check if player owns this character
             owned = False
             if user_id:
                 own = await conn.fetchrow("SELECT * FROM player_characters WHERE player_id = $1 AND character_name = $2",
@@ -329,7 +392,6 @@ async def send_char_page(message_or_callback, page):
                 buttons.append([InlineKeyboardButton(text=f"✅ Select {char['name']}", callback_data=f"char_select_{char['id']}")])
             else:
                 if char['price'] == 0:
-                    # Free character
                     buttons.append([InlineKeyboardButton(text=f"✅ Get Free {char['name']}", callback_data=f"char_buy_free_{char['id']}")])
                 else:
                     buttons.append([InlineKeyboardButton(text=f"💰 Buy {char['name']} (¥{char['price']:,})", callback_data=f"char_buy_{char['id']}")])
@@ -338,7 +400,6 @@ async def send_char_page(message_or_callback, page):
                 InlineKeyboardButton(text=f"{page+1}", callback_data="char_page_noop"),
                 InlineKeyboardButton(text="➡️", callback_data=f"char_page_{page+1}")
             ])
-
             keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
             if isinstance(message_or_callback, types.Message):
@@ -375,10 +436,9 @@ async def char_buy_cb(callback: types.CallbackQuery):
     if parts[1] == "buy":
         char_id = int(parts[2])
         free = False
-    else:  # buy_free
+    else:
         char_id = int(parts[3])
         free = True
-
     user_id = callback.from_user.id
     try:
         async with db_pool.acquire() as conn:
@@ -386,30 +446,24 @@ async def char_buy_cb(callback: types.CallbackQuery):
             if not char:
                 await callback.answer("Character not found!", show_alert=True)
                 return
-            # Check if already owned
             owned = await conn.fetchrow("SELECT * FROM player_characters WHERE player_id = $1 AND character_name = $2",
                                         user_id, char['name'])
             if owned:
                 await callback.answer("You already own this character!", show_alert=True)
                 return
             if not free:
-                # Check yen
                 player = await conn.fetchrow("SELECT yen FROM players WHERE user_id = $1", user_id)
                 if player['yen'] < char['price']:
                     await callback.answer(f"Not enough Yen! Need ¥{char['price']:,}", show_alert=True)
                     return
-                # Deduct yen
                 await conn.execute("UPDATE players SET yen = yen - $1 WHERE user_id = $2", char['price'], user_id)
-                # Add to player_characters
                 await conn.execute("INSERT INTO player_characters (player_id, character_name) VALUES ($1, $2)",
                                    user_id, char['name'])
                 await callback.answer(f"Bought {char['name']}!")
             else:
-                # Free character
                 await conn.execute("INSERT INTO player_characters (player_id, character_name) VALUES ($1, $2)",
                                    user_id, char['name'])
                 await callback.answer(f"Got {char['name']} for free!")
-            # Refresh page
             await send_char_page(callback, 0)
     except Exception as e:
         await callback.answer(f"Error: {e}", show_alert=True)
@@ -424,7 +478,6 @@ async def char_select_cb(callback: types.CallbackQuery):
             if not char:
                 await callback.answer("Character not found!", show_alert=True)
                 return
-            # Check ownership
             owned = await conn.fetchrow("SELECT * FROM player_characters WHERE player_id = $1 AND character_name = $2",
                                         user_id, char['name'])
             if not owned and char['price'] != 0:
@@ -461,7 +514,9 @@ async def char_select_cb(callback: types.CallbackQuery):
 async def char_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
-# ----- SELECT (also check ownership) -----
+# ============================================================
+# SELECT (with ownership check)
+# ============================================================
 @dp.message(Command("select"))
 async def select_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -476,7 +531,6 @@ async def select_cmd(message: types.Message):
             if not char:
                 await message.reply(f"Character '{name}' not found.")
                 return
-            # Check ownership
             owned = await conn.fetchrow("SELECT * FROM player_characters WHERE player_id = $1 AND character_name = $2",
                                         user_id, char['name'])
             if not owned and char['price'] != 0:
@@ -494,7 +548,9 @@ async def select_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ----- SHOP (unchanged) -----
+# ============================================================
+# SHOP (unchanged)
+# ============================================================
 @dp.message(Command("shop"))
 async def shop_cmd(message: types.Message):
     args = message.text.split()
@@ -559,7 +615,9 @@ async def shop_page_cb(callback: types.CallbackQuery):
 async def shop_page_noop(callback: types.CallbackQuery):
     await callback.answer("Current page")
 
-# ----- BUY (unchanged) -----
+# ============================================================
+# BUY (unchanged)
+# ============================================================
 @dp.message(Command("buy"))
 async def buy_cmd(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -595,7 +653,9 @@ async def buy_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ----- BAG, USE, EQUIP, LEARN, TECHNIQUES (unchanged) -----
+# ============================================================
+# BAG, USE, EQUIP, LEARN, TECHNIQUES (unchanged)
+# ============================================================
 @dp.message(Command("bag"))
 async def bag_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -737,13 +797,10 @@ async def learn_cmd(message: types.Message):
             if not player:
                 await message.reply("Start with /start first!")
                 return
-            # Check if player has it in techniques array
             techniques = player.get('techniques') or []
             if tech_name not in techniques:
                 await message.reply(f"❌ You don't own '{tech_name}'. Buy it from /shop first.")
                 return
-            # Move from techniques array to learned? Actually we already have techniques array as learned.
-            # But we can just confirm.
             await message.reply_animation(
                 animation=EFFECTS["cursed_energy"],
                 caption=f"🌀 **{tech_name}** is ready to use in battle!\nUse the 'Technique' button."
@@ -775,7 +832,9 @@ async def techniques_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-# ----- ENEMIES -----
+# ============================================================
+# ENEMIES (unchanged)
+# ============================================================
 @dp.message(Command("enemies"))
 async def enemies_cmd(message: types.Message):
     try:
@@ -799,7 +858,7 @@ async def enemies_cmd(message: types.Message):
         await message.reply(f"Error: {e}")
 
 # ============================================================
-# BATTLE SYSTEM (with Moves Menu & Multi-Attack)
+# BATTLE SYSTEM (SLOT-BASED QUEUE)
 # ============================================================
 @dp.message(Command("battle"))
 async def battle_cmd(message: types.Message):
@@ -824,9 +883,10 @@ async def battle_cmd(message: types.Message):
             """, message.chat.id, user_id, player['hp'], enemy['hp'], 
                enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
                enemy.get('reward_yen', 1000), enemy.get('reward_xp', 100), enemy['hp'])
-            # Initialize queue for this battle
-            battle_queues[battle_id] = {"player_id": user_id, "moves": []}
-            await show_battle_menu(message, battle_id, player, enemy)
+            # Initialize queue with empty slots
+            max_slots = get_max_slots(player['level'])
+            battle_queues[battle_id] = {"player_id": user_id, "slots": [None] * max_slots}
+            await show_battle_slots(message, battle_id, player, enemy)
     except Exception as e:
         await message.reply(f"Error starting battle: {e}")
 
@@ -858,25 +918,62 @@ async def boss_cmd(message: types.Message):
             """, message.chat.id, user_id, player['hp'], enemy['hp'], 
                enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
                enemy.get('reward_yen', 5000), enemy.get('reward_xp', 500), enemy['hp'])
-            battle_queues[battle_id] = {"player_id": user_id, "moves": []}
-            await show_battle_menu(message, battle_id, player, enemy)
+            max_slots = get_max_slots(player['level'])
+            battle_queues[battle_id] = {"player_id": user_id, "slots": [None] * max_slots}
+            await show_battle_slots(message, battle_id, player, enemy)
     except Exception as e:
         await message.reply(f"Error: {e}")
 
-async def show_battle_menu(message_or_callback, battle_id, player, enemy):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚔️ Attack", callback_data=f"bm_{battle_id}_attack"),
-         InlineKeyboardButton(text="🛡️ Defend", callback_data=f"bm_{battle_id}_defend")],
-        [InlineKeyboardButton(text="💥 Special", callback_data=f"bm_{battle_id}_special"),
-         InlineKeyboardButton(text="🌀 Technique", callback_data=f"bm_{battle_id}_technique")],
-        [InlineKeyboardButton(text="🌐 Domain", callback_data=f"bm_{battle_id}_domain"),
-         InlineKeyboardButton(text="📜 Moves", callback_data=f"bm_{battle_id}_moves")],
-        [InlineKeyboardButton(text="▶️ Execute", callback_data=f"bm_{battle_id}_execute"),
-         InlineKeyboardButton(text="🏃 Run", callback_data=f"bm_{battle_id}_run")]
-    ])
+async def show_battle_slots(message_or_callback, battle_id, player, enemy):
+    queue = battle_queues.get(battle_id, {"slots": [None] * get_max_slots(player['level'])})
+    slots = queue.get("slots", [])
+    max_slots = len(slots)
+    # Build queue display
+    queue_lines = []
+    total_ce_cost = 0
+    for i, slot in enumerate(slots):
+        if slot is None:
+            queue_lines.append(f"Slot {i+1}: [ ]")
+        else:
+            ce_cost = slot.get('ce_cost', 0)
+            total_ce_cost += ce_cost
+            queue_lines.append(format_slot(slot, i))
+    used_slots = sum(1 for s in slots if s is not None)
+    queue_text = "\n".join(queue_lines)
+    ce_remaining = player['ce'] - total_ce_cost
+
+    # Build keyboard with move buttons
+    keyboard = []
+    # Row 1: Attack, Defend, Special, Technique, Domain
+    row1 = []
+    row1.append(InlineKeyboardButton(text="⚔️ Attack (0)", callback_data=f"bs_add_{battle_id}_attack"))
+    row1.append(InlineKeyboardButton(text="🛡️ Defend (0)", callback_data=f"bs_add_{battle_id}_defend"))
+    row1.append(InlineKeyboardButton(text="💥 Special (30)", callback_data=f"bs_add_{battle_id}_special"))
+    row1.append(InlineKeyboardButton(text="🌀 Tech", callback_data=f"bs_tech_{battle_id}"))
+    row1.append(InlineKeyboardButton(text="🌐 Domain", callback_data=f"bs_domain_{battle_id}"))
+    keyboard.append(row1)
+    # Row 2: Remove last slot, Clear all, Execute, Run
+    row2 = []
+    row2.append(InlineKeyboardButton(text="🗑️ Clear", callback_data=f"bs_clear_{battle_id}"))
+    row2.append(InlineKeyboardButton(text="▶️ Execute", callback_data=f"bs_execute_{battle_id}"))
+    row2.append(InlineKeyboardButton(text="🏃 Run", callback_data=f"bs_run_{battle_id}"))
+    keyboard.append(row2)
+    # Add remove buttons for filled slots (if any)
+    remove_buttons = []
+    for i, slot in enumerate(slots):
+        if slot is not None:
+            remove_buttons.append(InlineKeyboardButton(text=f"❌ Slot {i+1}", callback_data=f"bs_remove_{battle_id}_{i}"))
+    if remove_buttons:
+        # split into rows of 3
+        for i in range(0, len(remove_buttons), 3):
+            keyboard.append(remove_buttons[i:i+3])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+
     hp_bar = build_hp_bar(player['hp'], player['max_hp'])
     ce_bar = build_ce_bar(player['ce'], player['max_ce'])
     enemy_hp_bar = build_hp_bar(enemy['hp'], enemy['hp'])
+
     caption = (
         f"⚔️ **BATTLE**\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
@@ -887,132 +984,173 @@ async def show_battle_menu(message_or_callback, battle_id, player, enemy):
         f"💀 **{enemy['name']}** - {enemy['rank']}\n"
         f"❤️ HP: {enemy['hp']} {enemy_hp_bar}\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
-        f"Select action or add to queue with 'Moves'."
+        f"📦 **QUEUE** ({used_slots}/{max_slots} slots used)\n"
+        f"{queue_text}\n"
+        f"Total CE cost: {total_ce_cost} | Remaining CE: {ce_remaining}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"Select a move to add, then press Execute."
     )
+
     if isinstance(message_or_callback, types.Message):
         msg = message_or_callback
         if enemy.get('image_url'):
-            await msg.reply_photo(photo=enemy['image_url'], caption=caption, reply_markup=keyboard)
+            await msg.reply_photo(photo=enemy['image_url'], caption=caption, reply_markup=markup)
         else:
-            await msg.reply(caption, reply_markup=keyboard)
+            await msg.reply(caption, reply_markup=markup)
     else:
         callback = message_or_callback
         if enemy.get('image_url'):
             await callback.message.edit_media(
                 types.InputMediaPhoto(media=enemy['image_url'], caption=caption),
-                reply_markup=keyboard
+                reply_markup=markup
             )
         else:
-            await callback.message.edit_text(caption, reply_markup=keyboard)
+            await callback.message.edit_text(caption, reply_markup=markup)
 
-# ----- BATTLE MENU CALLBACKS -----
-@dp.callback_query(lambda c: c.data.startswith("bm_"))
-async def battle_menu_cb(callback: types.CallbackQuery):
+# ----- BATTLE SLOT CALLBACKS -----
+@dp.callback_query(lambda c: c.data.startswith("bs_"))
+async def battle_slot_cb(callback: types.CallbackQuery):
     parts = callback.data.split("_")
-    battle_id = int(parts[1])
-    action = parts[2]
+    action = parts[1]
+    battle_id = int(parts[2])
     user_id = callback.from_user.id
 
-    # Get battle and player data
     async with db_pool.acquire() as conn:
         battle = await conn.fetchrow("SELECT * FROM battles WHERE id = $1", battle_id)
         if not battle:
             await callback.answer("Battle expired!", show_alert=True)
             return
         if battle['status'] != 'active':
-            await callback.answer("Battle already ended.", show_alert=True)
+            await callback.answer("Battle ended.", show_alert=True)
             return
         player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player1_id'])
+        if not player:
+            await callback.answer("Player not found!", show_alert=True)
+            return
         enemy = {"name": battle['enemy_name'], "rank": battle['enemy_rank'], "hp": battle['current_hp2'],
                  "atk": battle['enemy_atk'], "def": battle['enemy_def'], "spd": battle['enemy_spd'],
                  "max_hp": battle['enemy_max_hp']}
 
-    if action == "execute":
-        # Execute queued moves
-        queue = battle_queues.get(battle_id, {"moves": []})
-        moves = queue.get("moves", [])
-        if not moves:
-            await callback.answer("No moves queued. Add moves first.", show_alert=True)
-            return
-        # Process moves sequentially
-        total_damage = 0
-        total_ce_cost = 0
-        move_descriptions = []
-        # Re-fetch latest player CE
-        async with db_pool.acquire() as conn:
-            player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player1_id'])
-            current_ce = player['ce']
-            # Validate CE total
-            for move in moves:
-                ce_cost = move.get('ce_cost', 0)
-                total_ce_cost += ce_cost
-            if current_ce < total_ce_cost:
-                await callback.answer(f"Not enough CE! Need {total_ce_cost}, have {current_ce}", show_alert=True)
+        queue = battle_queues.get(battle_id, {"slots": [None] * get_max_slots(player['level'])})
+        slots = queue.get("slots", [])
+        max_slots = len(slots)
+
+        if action == "add":
+            move_type = parts[3]
+            # Find first empty slot
+            empty_index = -1
+            for i, s in enumerate(slots):
+                if s is None:
+                    empty_index = i
+                    break
+            if empty_index == -1:
+                await callback.answer("Queue full! Use Clear or Execute.", show_alert=True)
                 return
-            # Deduct CE
-            await conn.execute("UPDATE players SET ce = ce - $1 WHERE user_id = $2", total_ce_cost, player['user_id'])
-            # Process each move
-            for move in moves:
-                move_type = move.get('type')
+            # Create move dict
+            ce_cost = 0
+            if move_type == "attack":
+                move = {"type": "attack", "ce_cost": 0}
+            elif move_type == "defend":
+                move = {"type": "defend", "ce_cost": 0}
+            elif move_type == "special":
+                move = {"type": "special", "ce_cost": 30}
+            else:
+                await callback.answer("Unknown move.", show_alert=True)
+                return
+            slots[empty_index] = move
+            queue["slots"] = slots
+            battle_queues[battle_id] = queue
+            await callback.answer(f"Added {move_type} to slot {empty_index+1}!")
+            # Refresh battle view
+            await show_battle_slots(callback, battle_id, player, enemy)
+
+        elif action == "remove":
+            slot_idx = int(parts[3])
+            if slot_idx < 0 or slot_idx >= len(slots):
+                await callback.answer("Invalid slot.", show_alert=True)
+                return
+            if slots[slot_idx] is None:
+                await callback.answer("Slot is empty.", show_alert=True)
+                return
+            slots[slot_idx] = None
+            queue["slots"] = slots
+            battle_queues[battle_id] = queue
+            await callback.answer(f"Cleared slot {slot_idx+1}.")
+            await show_battle_slots(callback, battle_id, player, enemy)
+
+        elif action == "clear":
+            for i in range(len(slots)):
+                slots[i] = None
+            queue["slots"] = slots
+            battle_queues[battle_id] = queue
+            await callback.answer("Queue cleared.")
+            await show_battle_slots(callback, battle_id, player, enemy)
+
+        elif action == "execute":
+            # Validate CE
+            total_ce = sum(s.get('ce_cost', 0) for s in slots if s is not None)
+            if player['ce'] < total_ce:
+                await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
+                return
+            # Execute all moves in order
+            exec_log = []
+            total_damage = 0
+            defend_flag = False
+            # Deduct CE first
+            await conn.execute("UPDATE players SET ce = ce - $1 WHERE user_id = $2", total_ce, player['user_id'])
+            new_player_ce = player['ce'] - total_ce
+            # Process each slot
+            for slot in slots:
+                if slot is None:
+                    continue
+                move_type = slot.get('type')
                 if move_type == 'attack':
                     dmg = max(1, int(player['atk'] * random.uniform(0.8, 1.2)))
                     total_damage += dmg
-                    move_descriptions.append(f"⚔️ Attack: {dmg} damage")
+                    exec_log.append(f"⚔️ Attack: {dmg} damage")
                 elif move_type == 'defend':
-                    # Defend reduces next enemy damage by 50% (we'll apply later)
-                    # We'll store a defend flag in battle
-                    await conn.execute("UPDATE battles SET defend_flag = TRUE WHERE id = $1", battle_id)
-                    move_descriptions.append("🛡️ Defend (next enemy damage halved)")
+                    defend_flag = True
+                    exec_log.append("🛡️ Defend (halves next enemy damage)")
                 elif move_type == 'special':
-                    if player['ce'] < 30:
-                        await callback.answer("Not enough CE for Special!", show_alert=True)
-                        return
-                    await conn.execute("UPDATE players SET ce = ce - 30 WHERE user_id = $1", player['user_id'])
                     dmg = max(1, int(player['atk'] * random.uniform(1.5, 2.5)))
                     total_damage += dmg
-                    move_descriptions.append(f"💥 Special: {dmg} damage")
+                    exec_log.append(f"💥 Special: {dmg} damage")
                 elif move_type == 'technique':
-                    tech_name = move.get('tech_name')
+                    tech_name = slot.get('tech_name')
                     tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", tech_name)
-                    if not tech:
-                        continue
-                    if player['ce'] < tech['ce_cost']:
-                        await callback.answer(f"Not enough CE for {tech_name}!", show_alert=True)
-                        return
-                    await conn.execute("UPDATE players SET ce = ce - $1 WHERE user_id = $2", tech['ce_cost'], player['user_id'])
-                    dmg = max(1, int(player['atk'] * tech['damage_multiplier'] * random.uniform(0.9, 1.1)))
-                    total_damage += dmg
-                    move_descriptions.append(f"🌀 {tech_name}: {dmg} damage")
+                    if tech:
+                        dmg = max(1, int(player['atk'] * tech['damage_multiplier'] * random.uniform(0.9, 1.1)))
+                        total_damage += dmg
+                        exec_log.append(f"🌀 {tech_name}: {dmg} damage")
                 elif move_type == 'domain':
-                    domain_name = move.get('domain_name')
+                    domain_name = slot.get('domain_name')
                     domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", domain_name)
-                    if not domain:
-                        domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", domain_name)
-                        if not domain_item:
-                            continue
-                        ce_cost = int(parse_effect(domain_item['effect']).get('ce_cost', 100))
-                        dmg_mult = float(parse_effect(domain_item['effect']).get('damage', 3.5))
+                    if domain:
+                        dmg = max(1, int(player['atk'] * domain['damage_multiplier'] * random.uniform(0.9, 1.1)))
+                        total_damage += dmg
+                        exec_log.append(f"🌐 {domain_name}: {dmg} damage")
                     else:
-                        ce_cost = domain['ce_cost']
-                        dmg_mult = domain['damage_multiplier']
-                    if player['ce'] < ce_cost:
-                        await callback.answer(f"Not enough CE for {domain_name}!", show_alert=True)
-                        return
-                    await conn.execute("UPDATE players SET ce = ce - $1 WHERE user_id = $2", ce_cost, player['user_id'])
-                    dmg = max(1, int(player['atk'] * dmg_mult * random.uniform(0.9, 1.1)))
-                    total_damage += dmg
-                    move_descriptions.append(f"🌐 {domain_name}: {dmg} damage")
+                        # check shop_items fallback
+                        domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", domain_name)
+                        if domain_item:
+                            dmg_mult = float(parse_effect(domain_item['effect']).get('damage', 3.5))
+                            dmg = max(1, int(player['atk'] * dmg_mult * random.uniform(0.9, 1.1)))
+                            total_damage += dmg
+                            exec_log.append(f"🌐 {domain_name}: {dmg} damage")
             # Apply total damage to enemy
             new_enemy_hp = max(0, battle['current_hp2'] - total_damage)
             await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", new_enemy_hp, battle_id)
-            # Enemy counter (unless defend flag)
-            defend_flag = battle['defend_flag']
-            enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.5, 0.9)))
-            if defend_flag:
-                enemy_dmg = enemy_dmg // 2
+            # Enemy counter (only if not defended)
+            enemy_dmg = 0
+            if not defend_flag:
+                enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.5, 0.9)))
+            else:
+                enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.2, 0.4)))  # reduced
+                # clear defend flag
                 await conn.execute("UPDATE battles SET defend_flag = FALSE WHERE id = $1", battle_id)
             new_player_hp = max(0, battle['current_hp1'] - enemy_dmg)
             await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_player_hp, battle_id)
+
             # Check win/lose
             if new_enemy_hp <= 0:
                 await conn.execute("""
@@ -1024,15 +1162,13 @@ async def battle_menu_cb(callback: types.CallbackQuery):
                 await callback.message.edit_text(
                     f"🎉 **VICTORY!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"Executed {len(moves)} moves:\n" + "\n".join(move_descriptions) +
+                    f"Executed moves:\n" + "\n".join(exec_log) +
                     f"\n━━━━━━━━━━━━━━━━━━━\n"
                     f"You defeated **{battle['enemy_name']}**!\n"
                     f"💰 +¥{battle['enemy_reward_yen'] or 1000}\n"
                     f"⭐ +{battle['enemy_reward_xp'] or 100} XP"
                 )
-                # Clear queue
-                if battle_id in battle_queues:
-                    del battle_queues[battle_id]
+                del battle_queues[battle_id]
                 await callback.answer("Victory! 🎉")
                 return
             if new_player_hp <= 0:
@@ -1041,217 +1177,154 @@ async def battle_menu_cb(callback: types.CallbackQuery):
                 await callback.message.edit_text(
                     f"💀 **DEFEAT!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"Executed {len(moves)} moves:\n" + "\n".join(move_descriptions) +
+                    f"Executed moves:\n" + "\n".join(exec_log) +
                     f"\n━━━━━━━━━━━━━━━━━━━\n"
-                    f"You were defeated by **{battle['enemy_name']}**!\n"
-                    f"Train harder."
+                    f"You were defeated by **{battle['enemy_name']}**!"
                 )
-                if battle_id in battle_queues:
-                    del battle_queues[battle_id]
+                del battle_queues[battle_id]
                 await callback.answer("Defeated! 💀")
                 return
-            # Battle continues, clear queue, show updated menu
-            if battle_id in battle_queues:
-                battle_queues[battle_id]["moves"] = []
-            # Update player stats in battle
-            player['hp'] = new_player_hp
-            player['ce'] = player['ce'] - total_ce_cost
-            enemy['hp'] = new_enemy_hp
-            await show_battle_menu(callback, battle_id, player, enemy)
-            await callback.answer(f"Executed {len(moves)} moves!")
 
-    elif action == "moves":
-        # Show move selection menu
-        queue = battle_queues.get(battle_id, {"moves": []})
-        current_queue = queue.get("moves", [])
-        # Build list of available moves
-        techs = player.get('techniques') or []
-        domains = player.get('domains') or []
-        move_buttons = []
-        # Attack (0 CE)
-        move_buttons.append([InlineKeyboardButton(text="⚔️ Attack (0 CE)", callback_data=f"bq_{battle_id}_attack")])
-        # Defend (0 CE)
-        move_buttons.append([InlineKeyboardButton(text="🛡️ Defend (0 CE)", callback_data=f"bq_{battle_id}_defend")])
-        # Special (30 CE)
-        move_buttons.append([InlineKeyboardButton(text="💥 Special (30 CE)", callback_data=f"bq_{battle_id}_special")])
-        # Techniques
-        for t in techs[:8]:
-            tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", t)
+            # Clear slots after execution
+            for i in range(len(slots)):
+                slots[i] = None
+            queue["slots"] = slots
+            battle_queues[battle_id] = queue
+            # Update player stats for display
+            player['hp'] = new_player_hp
+            player['ce'] = new_player_ce
+            enemy['hp'] = new_enemy_hp
+            await show_battle_slots(callback, battle_id, player, enemy)
+            await callback.answer(f"Executed {len([s for s in slots if s is None])} moves!")
+
+        elif action == "run":
+            if random.random() < 0.6:
+                await callback.message.edit_text("🏃 You successfully escaped!")
+                del battle_queues[battle_id]
+                await callback.answer("Escaped! 🏃")
+            else:
+                enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.8, 1.2)))
+                new_hp = max(0, battle['current_hp1'] - enemy_dmg)
+                await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_hp, battle_id)
+                if new_hp <= 0:
+                    await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
+                    await callback.message.reply_animation(animation=EFFECTS["defeat"])
+                    await callback.message.edit_text("💀 **DEFEAT!**")
+                    del battle_queues[battle_id]
+                    await callback.answer("Defeated! 💀")
+                    return
+                # Continue battle
+                player['hp'] = new_hp
+                await show_battle_slots(callback, battle_id, player, enemy)
+                await callback.answer("Failed to escape! Enemy attacked.")
+
+        elif action == "tech":
+            # Show technique selection
+            techs = player.get('techniques') or []
+            if not techs:
+                await callback.answer("You have no techniques!", show_alert=True)
+                return
+            buttons = []
+            for t in techs[:10]:
+                tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", t)
+                if tech:
+                    ce_cost = tech['ce_cost']
+                    buttons.append([InlineKeyboardButton(text=f"🌀 {t} ({ce_cost} CE)", callback_data=f"bs_addtech_{battle_id}_{t}")])
+            buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bs_back_{battle_id}")])
+            markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text(
+                f"🌀 **Select a Technique**\n"
+                f"Choose a technique to add to your queue.",
+                reply_markup=markup
+            )
+            await callback.answer()
+
+        elif action == "domain":
+            # Show domain selection
+            domains = player.get('domains') or []
+            if not domains:
+                await callback.answer("You have no domains!", show_alert=True)
+                return
+            buttons = []
+            for d in domains[:5]:
+                # find ce cost
+                domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", d)
+                if domain:
+                    ce_cost = domain['ce_cost']
+                else:
+                    domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", d)
+                    if domain_item:
+                        ce_cost = int(parse_effect(domain_item['effect']).get('ce_cost', 100))
+                    else:
+                        continue
+                buttons.append([InlineKeyboardButton(text=f"🌐 {d} ({ce_cost} CE)", callback_data=f"bs_adddomain_{battle_id}_{d}")])
+            buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bs_back_{battle_id}")])
+            markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text(
+                f"🌐 **Select a Domain**\n"
+                f"Choose a domain to add to your queue.",
+                reply_markup=markup
+            )
+            await callback.answer()
+
+        elif action == "addtech":
+            tech_name = parts[3]
+            # find empty slot
+            empty_index = -1
+            for i, s in enumerate(slots):
+                if s is None:
+                    empty_index = i
+                    break
+            if empty_index == -1:
+                await callback.answer("Queue full!", show_alert=True)
+                return
+            # Get ce cost
+            tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", tech_name)
             if tech:
                 ce_cost = tech['ce_cost']
-                move_buttons.append([InlineKeyboardButton(text=f"🌀 {t} ({ce_cost} CE)", callback_data=f"bq_{battle_id}_technique_{t}")])
-        # Domains
-        for d in domains[:3]:
-            domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", d)
+                move = {"type": "technique", "tech_name": tech_name, "ce_cost": ce_cost}
+            else:
+                await callback.answer("Technique not found.", show_alert=True)
+                return
+            slots[empty_index] = move
+            queue["slots"] = slots
+            battle_queues[battle_id] = queue
+            await callback.answer(f"Added {tech_name} to slot {empty_index+1}!")
+            # Return to battle view
+            await show_battle_slots(callback, battle_id, player, enemy)
+
+        elif action == "adddomain":
+            domain_name = parts[3]
+            empty_index = -1
+            for i, s in enumerate(slots):
+                if s is None:
+                    empty_index = i
+                    break
+            if empty_index == -1:
+                await callback.answer("Queue full!", show_alert=True)
+                return
+            # Get ce cost
+            domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", domain_name)
             if domain:
                 ce_cost = domain['ce_cost']
-                move_buttons.append([InlineKeyboardButton(text=f"🌐 {d} ({ce_cost} CE)", callback_data=f"bq_{battle_id}_domain_{d}")])
-        move_buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bq_{battle_id}_back")])
-        # Show current queue count
-        queue_status = f"Current queue: {len(current_queue)} moves."
-        if current_queue:
-            queue_status += "\n" + "\n".join([f"  • {m.get('type')}" for m in current_queue[:5]])
-        keyboard = InlineKeyboardMarkup(inline_keyboard=move_buttons)
-        await callback.message.edit_text(
-            f"📜 **Move Selection**\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"{queue_status}\n"
-            f"Select a move to add to your queue.\n"
-            f"Press 'Execute' to run all queued moves.",
-            reply_markup=keyboard
-        )
-        await callback.answer()
-
-    elif action == "run":
-        if random.random() < 0.6:
-            await callback.message.edit_text("🏃 You successfully escaped!")
-            if battle_id in battle_queues:
-                del battle_queues[battle_id]
-            await callback.answer("Escaped! 🏃")
-        else:
-            enemy_dmg = max(1, int(enemy['atk'] * random.uniform(0.8, 1.2)))
-            new_hp = max(0, battle['current_hp1'] - enemy_dmg)
-            await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_hp, battle_id)
-            if new_hp <= 0:
-                await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
-                await callback.message.reply_animation(animation=EFFECTS["defeat"])
-                await callback.message.edit_text("💀 **DEFEAT!**")
-                if battle_id in battle_queues:
-                    del battle_queues[battle_id]
-                await callback.answer("Defeated! 💀")
-                return
-            # Update player hp
-            player['hp'] = new_hp
-            await show_battle_menu(callback, battle_id, player, enemy)
-            await callback.answer("Failed to escape! Enemy attacked.")
-
-    # Other actions: add to queue (handled by separate callbacks)
-    else:
-        # Single action: add to queue
-        queue = battle_queues.get(battle_id, {"moves": []})
-        if action == "attack":
-            queue["moves"].append({"type": "attack", "ce_cost": 0})
-        elif action == "defend":
-            queue["moves"].append({"type": "defend", "ce_cost": 0})
-        elif action == "special":
-            queue["moves"].append({"type": "special", "ce_cost": 30})
-        elif action == "technique":
-            # If called directly, open technique selection (we use sub-callbacks)
-            # This is handled in separate callbacks
-            pass
-        elif action == "domain":
-            # Similarly
-            pass
-        battle_queues[battle_id] = queue
-        await callback.answer(f"Added {action} to queue!")
-        # Refresh battle menu
-        await show_battle_menu(callback, battle_id, player, enemy)
-
-# ----- QUEUE ADDITION CALLBACKS (for techniques/domains) -----
-@dp.callback_query(lambda c: c.data.startswith("bq_"))
-async def battle_queue_cb(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    battle_id = int(parts[1])
-    action = parts[2]
-    user_id = callback.from_user.id
-
-    async with db_pool.acquire() as conn:
-        battle = await conn.fetchrow("SELECT * FROM battles WHERE id = $1", battle_id)
-        if not battle:
-            await callback.answer("Battle expired!", show_alert=True)
-            return
-        player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player1_id'])
-        if not player:
-            await callback.answer("Player not found!", show_alert=True)
-            return
-
-    if action == "back":
-        # Return to battle menu
-        enemy = {"name": battle['enemy_name'], "rank": battle['enemy_rank'], "hp": battle['current_hp2'],
-                 "atk": battle['enemy_atk'], "def": battle['enemy_def'], "spd": battle['enemy_spd'],
-                 "max_hp": battle['enemy_max_hp']}
-        player['hp'] = battle['current_hp1']
-        player['ce'] = player['ce']  # keep
-        await show_battle_menu(callback, battle_id, player, enemy)
-        await callback.answer()
-        return
-
-    # Add specific move to queue
-    queue = battle_queues.get(battle_id, {"moves": []})
-    if action == "technique":
-        tech_name = parts[3]
-        tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", tech_name)
-        if tech:
-            queue["moves"].append({"type": "technique", "tech_name": tech_name, "ce_cost": tech['ce_cost']})
-            await callback.answer(f"Added {tech_name} to queue!")
-        else:
-            await callback.answer("Technique not found.", show_alert=True)
-            return
-    elif action == "domain":
-        domain_name = parts[3]
-        # try to get ce cost
-        domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", domain_name)
-        if domain:
-            ce_cost = domain['ce_cost']
-        else:
-            domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", domain_name)
-            if domain_item:
-                ce_cost = int(parse_effect(domain_item['effect']).get('ce_cost', 100))
             else:
-                await callback.answer("Domain not found.", show_alert=True)
-                return
-        queue["moves"].append({"type": "domain", "domain_name": domain_name, "ce_cost": ce_cost})
-        await callback.answer(f"Added {domain_name} to queue!")
-    elif action == "attack":
-        queue["moves"].append({"type": "attack", "ce_cost": 0})
-        await callback.answer("Added Attack to queue!")
-    elif action == "defend":
-        queue["moves"].append({"type": "defend", "ce_cost": 0})
-        await callback.answer("Added Defend to queue!")
-    elif action == "special":
-        queue["moves"].append({"type": "special", "ce_cost": 30})
-        await callback.answer("Added Special to queue!")
+                domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", domain_name)
+                if domain_item:
+                    ce_cost = int(parse_effect(domain_item['effect']).get('ce_cost', 100))
+                else:
+                    await callback.answer("Domain not found.", show_alert=True)
+                    return
+            move = {"type": "domain", "domain_name": domain_name, "ce_cost": ce_cost}
+            slots[empty_index] = move
+            queue["slots"] = slots
+            battle_queues[battle_id] = queue
+            await callback.answer(f"Added {domain_name} to slot {empty_index+1}!")
+            await show_battle_slots(callback, battle_id, player, enemy)
 
-    battle_queues[battle_id] = queue
-    # Refresh the move selection menu (stay in moves menu)
-    # We'll just send a notification and update the queue status.
-    # Better: re-render the moves menu.
-    # For simplicity, we'll just go back to moves menu.
-    # We can simulate a "moves" action.
-    # Let's call the moves callback again.
-    # We'll just edit the message to show updated queue.
-    current_queue = queue.get("moves", [])
-    queue_status = f"Current queue: {len(current_queue)} moves."
-    if current_queue:
-        queue_status += "\n" + "\n".join([f"  • {m.get('type')}" for m in current_queue[:5]])
-    # Rebuild the moves menu with the same buttons
-    techs = player.get('techniques') or []
-    domains = player.get('domains') or []
-    move_buttons = []
-    move_buttons.append([InlineKeyboardButton(text="⚔️ Attack (0 CE)", callback_data=f"bq_{battle_id}_attack")])
-    move_buttons.append([InlineKeyboardButton(text="🛡️ Defend (0 CE)", callback_data=f"bq_{battle_id}_defend")])
-    move_buttons.append([InlineKeyboardButton(text="💥 Special (30 CE)", callback_data=f"bq_{battle_id}_special")])
-    for t in techs[:8]:
-        tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", t)
-        if tech:
-            ce_cost = tech['ce_cost']
-            move_buttons.append([InlineKeyboardButton(text=f"🌀 {t} ({ce_cost} CE)", callback_data=f"bq_{battle_id}_technique_{t}")])
-    for d in domains[:3]:
-        domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", d)
-        if domain:
-            ce_cost = domain['ce_cost']
-            move_buttons.append([InlineKeyboardButton(text=f"🌐 {d} ({ce_cost} CE)", callback_data=f"bq_{battle_id}_domain_{d}")])
-    move_buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bq_{battle_id}_back")])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=move_buttons)
-    await callback.message.edit_text(
-        f"📜 **Move Selection**\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"{queue_status}\n"
-        f"Select a move to add to your queue.\n"
-        f"Press 'Execute' to run all queued moves.",
-        reply_markup=keyboard
-    )
-    await callback.answer()
+        elif action == "back":
+            # Return to battle view
+            await show_battle_slots(callback, battle_id, player, enemy)
+            await callback.answer()
 
 # ============================================================
 # PVP (unchanged)
@@ -1316,7 +1389,6 @@ async def pvp_accept_cmd(message: types.Message):
                 return
             player1 = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player1_id'])
             player2 = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player2_id'])
-            # For PvP we use simplified battle (no multi-attack yet)
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="⚔️ Attack", callback_data=f"pvp_act_{battle_id}_attack"),
                  InlineKeyboardButton(text="🛡️ Defend", callback_data=f"pvp_act_{battle_id}_defend")],
@@ -1530,6 +1602,7 @@ async def commands_cmd(message: types.Message):
         f"**General**\n"
         f"/start - Main menu\n"
         f"/profile - View your Cursed Chronicle\n"
+        f"/guide - Game guide\n"
         f"/commands - This list\n"
         f"/buyyen - Contact owner to purchase Yen\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
@@ -1538,7 +1611,7 @@ async def commands_cmd(message: types.Message):
         f"/select \"name\" - Quick select (must own)\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**Battle**\n"
-        f"/battle - Fight a curse (with multi-attack)\n"
+        f"/battle - Fight a curse (slot‑based queue)\n"
         f"/boss \"name\" - Fight a boss\n"
         f"/enemies - Enemy list\n"
         f"/pvp @user - Challenge a player\n"
