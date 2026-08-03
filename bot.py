@@ -1333,11 +1333,54 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         else:
             await callback.message.edit_text(caption, reply_markup=keyboard)
 
+# ============================================================
+# CORRECTED BATTLE CALLBACK
+# ============================================================
 @dp.callback_query(lambda c: c.data.startswith("bt_"))
 async def battle_turn_cb(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    action = parts[1]
-    battle_id = int(parts[2])
+    data = callback.data
+    parts = data.split("_")
+    action = parts[1]  # 'add', 'tech', 'domain', 'execute', 'run', 'back', 'add_tech', 'add_domain'
+
+    # Determine battle_id based on action
+    if action == "add":
+        # Format: bt_add_{battle_id}_{move_type}_{cp_cost}_{ce_cost}
+        battle_id = int(parts[2])
+        move_type = parts[3]
+        cp_cost = int(parts[4])
+        ce_cost = int(parts[5])
+    elif action == "tech":
+        # Format: bt_tech_{battle_id}
+        battle_id = int(parts[2])
+    elif action == "domain":
+        # Format: bt_domain_{battle_id}
+        battle_id = int(parts[2])
+    elif action == "execute":
+        # Format: bt_execute_{battle_id}
+        battle_id = int(parts[2])
+    elif action == "run":
+        # Format: bt_run_{battle_id}
+        battle_id = int(parts[2])
+    elif action == "back":
+        # Format: bt_back_{battle_id}
+        battle_id = int(parts[2])
+    elif action == "add_tech":
+        # Format: bt_add_tech_{battle_id}_{cp_cost}_{ce_cost}_{tech_name}
+        battle_id = int(parts[3])
+        cp_cost = int(parts[4])
+        ce_cost = int(parts[5])
+        tech_name = "_".join(parts[6:])
+    elif action == "add_domain":
+        # Format: bt_add_domain_{battle_id}_{cp_cost}_{ce_cost}_{dmg_mult}_{domain_name}
+        battle_id = int(parts[3])
+        cp_cost = int(parts[4])
+        ce_cost = int(parts[5])
+        dmg_mult = float(parts[6])
+        domain_name = "_".join(parts[7:])
+    else:
+        await callback.answer("Unknown action.", show_alert=True)
+        return
+
     user_id = callback.from_user.id
 
     async with db_pool.acquire() as conn:
@@ -1368,10 +1411,9 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             battle_queues[battle_id] = []
         queue = battle_queues[battle_id]
 
+        # ---- Handle each action ----
         if action == "add":
-            move_type = parts[3]
-            cp_cost = int(parts[4])
-            ce_cost = int(parts[5])
+            # Add move to queue (attack, defend, special)
             cp = get_combo_points(player['level'])
             used_cp = sum(m['cp_cost'] for m in queue)
             if used_cp + cp_cost > cp:
@@ -1388,6 +1430,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
 
         elif action == "tech":
+            # Show technique selection
             techs = player.get('techniques') or []
             if not techs:
                 await callback.answer("You have no techniques!", show_alert=True)
@@ -1409,6 +1452,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             await callback.answer()
 
         elif action == "domain":
+            # Show domain selection
             domains = player.get('domains') or []
             if not domains:
                 await callback.answer("You have no domains!", show_alert=True)
@@ -1442,6 +1486,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             await callback.answer()
 
         elif action == "execute":
+            # Execute all moves in queue
             if not queue:
                 await callback.answer("No moves in queue!", show_alert=True)
                 return
@@ -1455,7 +1500,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             exec_log = []
             total_damage = 0
             defend_flag = False
-            domain_used = False
 
             for move in queue:
                 mtype = move['type']
@@ -1477,6 +1521,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         dmg = max(1, int(player['atk'] * tech['damage_multiplier'] * random.uniform(0.9, 1.1)))
                         total_damage += dmg
                         exec_log.append(f"🌀 {tech_name}: {dmg} damage")
+                        # effects
                         if "Purple" in tech_name:
                             await callback.message.reply_animation(animation=EFFECTS["gojo_purple"])
                         elif "Red" in tech_name:
@@ -1488,7 +1533,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 elif mtype == 'domain':
                     domain_name = move.get('domain_name')
                     dmg_mult = move.get('dmg_mult', 3.5)
-                    domain_used = True
                     dmg = max(1, int(player['atk'] * dmg_mult * random.uniform(0.9, 1.1)))
                     total_damage += dmg
                     exec_log.append(f"🌐 **Domain: {domain_name}** (Sure-Hit, {dmg} damage)")
@@ -1516,7 +1560,9 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_player_hp, battle_id)
             player['hp'] = new_player_hp
 
+            # Win/lose check
             if new_enemy_hp <= 0:
+                # Victory
                 is_boss = battle['is_boss']
                 is_story = battle.get('is_story', False)
                 chapter_id = battle.get('chapter_id')
@@ -1541,11 +1587,8 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         VALUES ($1, $2, TRUE)
                         ON CONFLICT (player_id, chapter_id) DO UPDATE SET completed = TRUE
                     """, player['user_id'], chapter_id)
-                    # Give bonus reward_title
                     chapter = await conn.fetchrow("SELECT * FROM story_chapters WHERE id = $1", chapter_id)
                     if chapter and chapter.get('reward_title'):
-                        # Equip title or give as achievement
-                        # For simplicity, we'll notify
                         await callback.message.reply(f"📜 **Story Chapter Completed!**\nYou earned the title: {chapter['reward_title']}")
 
                 # Domain drop (boss only)
@@ -1588,11 +1631,10 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     await callback.message.reply_animation(animation=EFFECTS["achievement"])
                     await callback.message.reply("🏆 **Achievement Unlocked: First Blood!**")
 
-                # Dungeon or Tower progression
+                # Dungeon / Tower progression
                 if battle.get('is_dungeon'):
                     run_id = battle.get('dungeon_run_id')
                     if run_id:
-                        # Advance floor
                         await conn.execute("UPDATE dungeon_runs SET floor = floor + 1, enemies_defeated = enemies_defeated + 1 WHERE id = $1", run_id)
                         await callback.message.reply("🏰 You advance to the next floor!")
                 elif battle.get('is_tower'):
@@ -1622,7 +1664,8 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await callback.answer("Victory! 🎉")
                 return
 
-            if new_player_hp <= 0:
+            elif new_player_hp <= 0:
+                # Defeat
                 await callback.message.reply_animation(animation=EFFECTS["defeat"])
                 await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
                 summary = (
@@ -1640,12 +1683,15 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await callback.answer("Defeated! 💀")
                 return
 
-            battle_queues[battle_id] = []
-            enemy['hp'] = new_enemy_hp
-            await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
-            await callback.answer("Combo executed!")
+            else:
+                # Continue battle
+                battle_queues[battle_id] = []
+                enemy['hp'] = new_enemy_hp
+                await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
+                await callback.answer("Combo executed!")
 
         elif action == "run":
+            # Run
             if random.random() < 0.6:
                 await callback.message.edit_text("🏃 You successfully escaped!")
                 if user_id in ongoing_battles:
@@ -1673,9 +1719,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await callback.answer("Failed to escape! Enemy attacked.")
 
         elif action == "add_tech":
-            cp_cost = int(parts[3])
-            ce_cost = int(parts[4])
-            tech_name = "_".join(parts[5:])
+            # Add technique to queue (called from tech submenu)
             cp = get_combo_points(player['level'])
             used_cp = sum(m['cp_cost'] for m in queue)
             if used_cp + cp_cost > cp:
@@ -1692,10 +1736,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
 
         elif action == "add_domain":
-            cp_cost = int(parts[3])
-            ce_cost = int(parts[4])
-            dmg_mult = float(parts[5])
-            domain_name = "_".join(parts[6:])
+            # Add domain to queue (called from domain submenu)
             cp = get_combo_points(player['level'])
             used_cp = sum(m['cp_cost'] for m in queue)
             if used_cp + cp_cost > cp:
@@ -2216,7 +2257,7 @@ async def clan_cmd(message: types.Message):
             await message.reply("Unknown action. Use create, join, info, leave, or raid.")
 
 # ============================================================
-# AWAKENING, NPC, SHIKIGAMI, STORY, DUNGEON, TOWER, ACHIEVEMENTS (already above)
+# AWAKENING, NPC
 # ============================================================
 @dp.message(Command("awakening"))
 async def awakening_cmd(message: types.Message):
@@ -2280,11 +2321,6 @@ async def npc_cmd(message: types.Message):
             }
             reply = responses.get(npc['name'], f"{npc['name']}: {npc['description']}")
             await message.reply(f"🧙 **{npc['name']}** says:\n{reply}")
-
-@dp.message(Command("shikigami"))
-async def shikigami_cmd(message: types.Message):
-    # Already defined above, so we just pass
-    pass
 
 # ============================================================
 # OWNER INFO
