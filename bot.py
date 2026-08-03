@@ -1274,14 +1274,15 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
     queue = battle_queues.get(battle_id, {}).get('participants', {}).get(player['user_id'], [])
     used_cp = sum(m.get('cp_cost', 0) for m in queue)
 
-    # Build log text if provided
+    # Build log text – always use the queue's log if available
     log_text = ""
-    if log_lines:
-        log_text = "\n".join(f"• {line}" for line in log_lines[-5:])
-        log_text = f"\n📜 **Battle Log:**\n{log_text}\n"
-    elif battle_queues.get(battle_id, {}).get('log'):
+    if battle_queues.get(battle_id, {}).get('log'):
         log_lines = battle_queues[battle_id]['log'][-5:]
         log_text = "\n".join(f"• {line}" for line in log_lines)
+        log_text = f"\n📜 **Battle Log:**\n{log_text}\n"
+    elif log_lines:
+        # fallback if log_lines passed
+        log_text = "\n".join(f"• {line}" for line in log_lines[-5:])
         log_text = f"\n📜 **Battle Log:**\n{log_text}\n"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1579,7 +1580,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             battle_queues[battle_id]['log'].extend(exec_log)
             if len(battle_queues[battle_id]['log']) > 10:
                 battle_queues[battle_id]['log'] = battle_queues[battle_id]['log'][-10:]
-            print(f"[LOG] Battle {battle_id} log updated: {battle_queues[battle_id]['log']}")
+            print(f"[LOG] Battle {battle_id} log updated: {battle_queues[battle_id]['log']}")  # Railway log
 
             # Clear queue for this user
             battle_queues[battle_id]['participants'][user_id] = []
@@ -1669,6 +1670,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
 
                 # --- Show full battle log in victory summary ---
                 full_log = battle_queues[battle_id].get('log', [])
+                print(f"[VICTORY] full_log: {full_log}")  # Railway log
                 log_summary = "\n".join(f"• {line}" for line in full_log[-10:])
                 summary = (
                     f"🎉 **VICTORY!**\n"
@@ -1747,23 +1749,40 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await callback.answer("Failed to escape! Enemy attacked.")
 
 # ------------------------------------------------------------
-# DEBUG COMMAND – inspect battle log
+# DIAGNOSTIC COMMANDS
 # ------------------------------------------------------------
+@dp.message(Command("checklog"))
 @dp.message(Command("debuglog"))
-async def debuglog_cmd(message: types.Message):
+async def checklog_cmd(message: types.Message):
     user_id = message.from_user.id
     if user_id not in ongoing_battles:
         await message.reply("❌ No ongoing battle.")
         return
     battle_id = ongoing_battles[user_id]
     if battle_id not in battle_queues:
-        await message.reply("❌ Battle queue not found.")
+        await message.reply("❌ Battle queue missing.")
         return
     log = battle_queues[battle_id].get('log', [])
     if not log:
         await message.reply("📭 Battle log is empty.")
     else:
         await message.reply(f"📜 **Battle Log** (last 10 lines):\n" + "\n".join(log[-10:]))
+
+@dp.message(Command("debugqueue"))
+async def debugqueue_cmd(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ongoing_battles:
+        await message.reply("❌ No ongoing battle.")
+        return
+    battle_id = ongoing_battles[user_id]
+    queue = battle_queues.get(battle_id)
+    if not queue:
+        await message.reply("❌ Battle queue not found.")
+        return
+    # Show a clean representation
+    queue_copy = dict(queue)
+    # Convert to string for display
+    await message.reply(f"🔍 **Queue Data:**\n{json.dumps(queue_copy, indent=2)}")
 
 # ------------------------------------------------------------
 # RAID COMMANDS (Multiplayer)
