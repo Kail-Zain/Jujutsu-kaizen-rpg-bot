@@ -199,6 +199,7 @@ def dedupe_domains(domains):
             result.append(d)
     return result
 
+# FIXED: update_player_stats – always define new_hp and new_ce
 async def update_player_stats(user_id):
     async with db_pool.acquire() as conn:
         player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
@@ -227,14 +228,15 @@ async def update_player_stats(user_id):
         new_max_hp, new_max_ce, new_atk, new_def, new_spd = scale_stats_from_base(
             base_atk, base_def, base_spd, base_hp, base_ce, new_level, bonus_atk, bonus_hp, r_atk, r_def, r_spd
         )
+        # Compute new HP and CE based on current ratios
+        hp_ratio = player['hp'] / player['max_hp'] if player['max_hp'] > 0 else 1
+        ce_ratio = player['ce'] / player['max_ce'] if player['max_ce'] > 0 else 1
+        new_hp = int(new_max_hp * hp_ratio)
+        new_ce = int(new_max_ce * ce_ratio)
+        # Override for Toji (CE=0)
         if restriction == 'toji':
-            new_max_ce = 0
             new_ce = 0
-        else:
-            hp_ratio = player['hp'] / player['max_hp'] if player['max_hp'] > 0 else 1
-            ce_ratio = player['ce'] / player['max_ce'] if player['max_ce'] > 0 else 1
-            new_hp = int(new_max_hp * hp_ratio)
-            new_ce = int(new_max_ce * ce_ratio)
+            new_max_ce = 0
         await conn.execute("""
             UPDATE players 
             SET level = $1, max_hp = $2, max_ce = $3, atk = $4, def = $5, spd = $6,
@@ -1580,7 +1582,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             battle_queues[battle_id]['log'].extend(exec_log)
             if len(battle_queues[battle_id]['log']) > 10:
                 battle_queues[battle_id]['log'] = battle_queues[battle_id]['log'][-10:]
-            print(f"[LOG] Battle {battle_id} log updated: {battle_queues[battle_id]['log']}")  # Railway log
+            print(f"[LOG] Battle {battle_id} log updated: {battle_queues[battle_id]['log']}")
 
             # Clear queue for this user
             battle_queues[battle_id]['participants'][user_id] = []
@@ -1670,7 +1672,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
 
                 # --- Show full battle log in victory summary ---
                 full_log = battle_queues[battle_id].get('log', [])
-                print(f"[VICTORY] full_log: {full_log}")  # Railway log
+                print(f"[VICTORY] full_log: {full_log}")
                 log_summary = "\n".join(f"• {line}" for line in full_log[-10:])
                 summary = (
                     f"🎉 **VICTORY!**\n"
