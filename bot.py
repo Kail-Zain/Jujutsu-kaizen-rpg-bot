@@ -1277,7 +1277,6 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
     # Build log text if provided
     log_text = ""
     if log_lines:
-        # Show last 5 lines
         log_text = "\n".join(f"• {line}" for line in log_lines[-5:])
         log_text = f"\n📜 **Battle Log:**\n{log_text}\n"
     elif battle_queues.get(battle_id, {}).get('log'):
@@ -1286,13 +1285,13 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         log_text = f"\n📜 **Battle Log:**\n{log_text}\n"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"⚔️ Attack (1 CP, 0 CE)", callback_data=f"bt_add_{battle_id}_attack_1_0")],
-        [InlineKeyboardButton(text=f"🛡️ Defend (1 CP, 0 CE)", callback_data=f"bt_add_{battle_id}_defend_1_0")],
-        [InlineKeyboardButton(text=f"💥 Special (2 CP, 30 CE)", callback_data=f"bt_add_{battle_id}_special_2_30")],
-        [InlineKeyboardButton(text="🌀 Technique", callback_data=f"bt_tech_{battle_id}")],
-        [InlineKeyboardButton(text="🌐 Domain", callback_data=f"bt_domain_{battle_id}")],
-        [InlineKeyboardButton(text=f"▶️ Execute Combo ({used_cp}/{cp} CP used)", callback_data=f"bt_execute_{battle_id}")],
-        [InlineKeyboardButton(text="🏃 Run", callback_data=f"bt_run_{battle_id}")]
+        [InlineKeyboardButton(text=f"⚔️ Attack (1 CP, 0 CE)", callback_data=f"bt|add|{battle_id}|attack|1|0")],
+        [InlineKeyboardButton(text=f"🛡️ Defend (1 CP, 0 CE)", callback_data=f"bt|add|{battle_id}|defend|1|0")],
+        [InlineKeyboardButton(text=f"💥 Special (2 CP, 30 CE)", callback_data=f"bt|add|{battle_id}|special|2|30")],
+        [InlineKeyboardButton(text="🌀 Technique", callback_data=f"bt|tech|{battle_id}")],
+        [InlineKeyboardButton(text="🌐 Domain", callback_data=f"bt|domain|{battle_id}")],
+        [InlineKeyboardButton(text=f"▶️ Execute Combo ({used_cp}/{cp} CP used)", callback_data=f"bt|execute|{battle_id}")],
+        [InlineKeyboardButton(text="🏃 Run", callback_data=f"bt|run|{battle_id}")]
     ])
 
     hp_bar = build_hp_bar(player['hp'], player['max_hp'])
@@ -1329,14 +1328,13 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         else:
             await callback.message.edit_text(caption, reply_markup=keyboard)
 
-# Updated callback handler with fixed parsing for technique/domain
-@dp.callback_query(lambda c: c.data.startswith("bt_"))
+@dp.callback_query(lambda c: c.data.startswith("bt|"))
 async def battle_turn_cb(callback: types.CallbackQuery):
     data = callback.data
-    parts = data.split("_")
-    action = parts[1]  # 'add', 'tech', 'domain', 'execute', 'run', 'back', 'addtech', 'adddomain'
+    parts = data.split("|")
+    # parts: ["bt", action, battle_id, ...]
+    action = parts[1]
 
-    # Determine battle_id and other params based on action
     if action == "add":
         battle_id = int(parts[2])
         move_type = parts[3]
@@ -1353,18 +1351,18 @@ async def battle_turn_cb(callback: types.CallbackQuery):
     elif action == "back":
         battle_id = int(parts[2])
     elif action == "addtech":
-        # bt_addtech_{battle_id}_{cp_cost}_{ce_cost}_{tech_name}
+        # bt|addtech|battle_id|cp_cost|ce_cost|tech_name
         battle_id = int(parts[2])
         cp_cost = int(parts[3])
         ce_cost = int(parts[4])
-        tech_name = " ".join(parts[5:]).replace('_', ' ')
+        tech_name = parts[5]
     elif action == "adddomain":
-        # bt_adddomain_{battle_id}_{cp_cost}_{ce_cost}_{dmg_mult}_{domain_name}
+        # bt|adddomain|battle_id|cp_cost|ce_cost|dmg_mult|domain_name
         battle_id = int(parts[2])
         cp_cost = int(parts[3])
         ce_cost = int(parts[4])
         dmg_mult = float(parts[5])
-        domain_name = " ".join(parts[6:]).replace('_', ' ')
+        domain_name = parts[6]
     else:
         await callback.answer("Unknown action.", show_alert=True)
         return
@@ -1398,7 +1396,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             battle_queues[battle_id]['participants'][user_id] = []
         queue = battle_queues[battle_id]['participants'][user_id]
 
-        # Handle each action
         if action == "add":
             cp = get_combo_points(player['level'])
             used_cp = sum(m.get('cp_cost', 0) for m in queue)
@@ -1425,8 +1422,11 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 if tech:
                     ce_cost = tech['ce_cost']
                     cp_cost = 2
-                    buttons.append([InlineKeyboardButton(text=f"🌀 {t} ({cp_cost} CP, {ce_cost} CE)", callback_data=f"bt_addtech_{battle_id}_{cp_cost}_{ce_cost}_{t.replace(' ', '_')}")])
-            buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bt_back_{battle_id}")])
+                    buttons.append([InlineKeyboardButton(
+                        text=f"🌀 {t} ({cp_cost} CP, {ce_cost} CE)",
+                        callback_data=f"bt|addtech|{battle_id}|{cp_cost}|{ce_cost}|{t}"
+                    )])
+            buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bt|back|{battle_id}")])
             markup = InlineKeyboardMarkup(inline_keyboard=buttons)
             await callback.message.edit_text(
                 f"🌀 **Select a Technique**\n"
@@ -1454,8 +1454,11 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     else:
                         continue
                 cp_cost = 3
-                buttons.append([InlineKeyboardButton(text=f"🌐 {d} ({cp_cost} CP, {ce_cost} CE, {dmg_mult}x)", callback_data=f"bt_adddomain_{battle_id}_{cp_cost}_{ce_cost}_{dmg_mult}_{d.replace(' ', '_')}")])
-            buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bt_back_{battle_id}")])
+                buttons.append([InlineKeyboardButton(
+                    text=f"🌐 {d} ({cp_cost} CP, {ce_cost} CE, {dmg_mult}x)",
+                    callback_data=f"bt|adddomain|{battle_id}|{cp_cost}|{ce_cost}|{dmg_mult}|{d}"
+                )])
+            buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bt|back|{battle_id}")])
             markup = InlineKeyboardMarkup(inline_keyboard=buttons)
             await callback.message.edit_text(
                 f"🌐 **Select a Domain**\n"
@@ -1467,6 +1470,36 @@ async def battle_turn_cb(callback: types.CallbackQuery):
         elif action == "back":
             await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
             await callback.answer()
+
+        elif action == "addtech":
+            cp = get_combo_points(player['level'])
+            used_cp = sum(m.get('cp_cost', 0) for m in queue)
+            if used_cp + cp_cost > cp:
+                await callback.answer(f"Not enough Combo Points! (Used {used_cp}/{cp})", show_alert=True)
+                return
+            total_ce = sum(m.get('ce_cost', 0) for m in queue) + ce_cost
+            if player['ce'] < total_ce:
+                await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
+                return
+            move = {"type": "technique", "cp_cost": cp_cost, "ce_cost": ce_cost, "tech_name": tech_name}
+            queue.append(move)
+            await callback.answer(f"Added {tech_name}!")
+            await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
+
+        elif action == "adddomain":
+            cp = get_combo_points(player['level'])
+            used_cp = sum(m.get('cp_cost', 0) for m in queue)
+            if used_cp + cp_cost > cp:
+                await callback.answer(f"Not enough Combo Points! (Used {used_cp}/{cp})", show_alert=True)
+                return
+            total_ce = sum(m.get('ce_cost', 0) for m in queue) + ce_cost
+            if player['ce'] < total_ce:
+                await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
+                return
+            move = {"type": "domain", "cp_cost": cp_cost, "ce_cost": ce_cost, "domain_name": domain_name, "dmg_mult": dmg_mult}
+            queue.append(move)
+            await callback.answer(f"Added {domain_name}!")
+            await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
 
         elif action == "execute":
             if not queue:
@@ -1705,8 +1738,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 log_lines = battle_queues[battle_id].get('log', [])
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects, log_lines)
                 await callback.answer("Failed to escape! Enemy attacked.")
-
-        # The addtech and adddomain actions are handled above in the main parsing
 
 # ------------------------------------------------------------
 # RAID COMMANDS (Multiplayer)
