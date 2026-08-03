@@ -1575,10 +1575,11 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_player_hp, battle_id)
             player['hp'] = new_player_hp
 
-            # Append log to battle queue
+            # --- CRITICAL: Append the log now ---
             battle_queues[battle_id]['log'].extend(exec_log)
             if len(battle_queues[battle_id]['log']) > 10:
                 battle_queues[battle_id]['log'] = battle_queues[battle_id]['log'][-10:]
+            print(f"[LOG] Battle {battle_id} log updated: {battle_queues[battle_id]['log']}")
 
             # Clear queue for this user
             battle_queues[battle_id]['participants'][user_id] = []
@@ -1668,7 +1669,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
 
                 # --- Show full battle log in victory summary ---
                 full_log = battle_queues[battle_id].get('log', [])
-                log_summary = "\n".join(f"• {line}" for line in full_log[-10:])  # show last 10 lines
+                log_summary = "\n".join(f"• {line}" for line in full_log[-10:])
                 summary = (
                     f"🎉 **VICTORY!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
@@ -1744,6 +1745,25 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 log_lines = battle_queues[battle_id].get('log', [])
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects, log_lines)
                 await callback.answer("Failed to escape! Enemy attacked.")
+
+# ------------------------------------------------------------
+# DEBUG COMMAND – inspect battle log
+# ------------------------------------------------------------
+@dp.message(Command("debuglog"))
+async def debuglog_cmd(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ongoing_battles:
+        await message.reply("❌ No ongoing battle.")
+        return
+    battle_id = ongoing_battles[user_id]
+    if battle_id not in battle_queues:
+        await message.reply("❌ Battle queue not found.")
+        return
+    log = battle_queues[battle_id].get('log', [])
+    if not log:
+        await message.reply("📭 Battle log is empty.")
+    else:
+        await message.reply(f"📜 **Battle Log** (last 10 lines):\n" + "\n".join(log[-10:]))
 
 # ------------------------------------------------------------
 # RAID COMMANDS (Multiplayer)
