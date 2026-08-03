@@ -143,7 +143,6 @@ def scale_stats_from_base(base_atk, base_def, base_spd, base_hp, base_ce, level,
     new_spd = base_spd + level + restriction_bonus_spd
     return new_hp, new_ce, new_atk, new_def, new_spd
 
-# NEW: scale enemy based on player stats
 def scale_enemy_to_player(player, enemy_base):
     if not player or not enemy_base:
         return enemy_base
@@ -1157,7 +1156,7 @@ async def story_chapter_cmd(message: types.Message):
         await boss_cmd(message, chapter['boss_name'], is_story=True, chapter_id=chapter['id'])
 
 # ------------------------------------------------------------
-# BOSS & BATTLE (with scaling and raid support)
+# BOSS & BATTLE (with scaling, raid support, and battle logs)
 # ------------------------------------------------------------
 async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool = False, chapter_id: int = None):
     if boss_name is None:
@@ -1203,7 +1202,11 @@ async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool
                enemy.get('reward_yen', 5000), enemy.get('reward_xp', 500), enemy['hp'],
                json.dumps([]), json.dumps([user_id]), is_story, chapter_id)
             ongoing_battles[user_id] = battle_id
-            battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp']}
+            battle_queues[battle_id] = {
+                "participants": {user_id: []},
+                "current_hp": enemy['hp'],
+                "log": []   # battle log storage
+            }
             vows = await conn.fetch("SELECT v.effect FROM player_vows pv JOIN binding_vows v ON pv.vow_id = v.id WHERE pv.player_id = $1 AND pv.active = TRUE", user_id)
             vow_effects = [v['effect'] for v in vows]
             await conn.execute("UPDATE battles SET vow_effects = $1 WHERE id = $2", json.dumps(vow_effects), battle_id)
@@ -1254,7 +1257,11 @@ async def battle_cmd(message: types.Message):
                enemy.get('reward_yen', 1000), enemy.get('reward_xp', 100), enemy['hp'],
                json.dumps([]), json.dumps([user_id]))
             ongoing_battles[user_id] = battle_id
-            battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp']}
+            battle_queues[battle_id] = {
+                "participants": {user_id: []},
+                "current_hp": enemy['hp'],
+                "log": []
+            }
             vows = await conn.fetch("SELECT v.effect FROM player_vows pv JOIN binding_vows v ON pv.vow_id = v.id WHERE pv.player_id = $1 AND pv.active = TRUE", user_id)
             vow_effects = [v['effect'] for v in vows]
             await conn.execute("UPDATE battles SET vow_effects = $1 WHERE id = $2", json.dumps(vow_effects), battle_id)
@@ -1262,9 +1269,22 @@ async def battle_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"Error starting battle: {e}")
 
-async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_effects=[]):
+async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_effects=[], log_lines=None):
     cp = get_combo_points(player['level'])
-    used_cp = sum(m['cp_cost'] for m in battle_queues.get(battle_id, {}).get('participants', {}).get(player['user_id'], []))
+    queue = battle_queues.get(battle_id, {}).get('participants', {}).get(player['user_id'], [])
+    used_cp = sum(m.get('cp_cost', 0) for m in queue)
+
+    # Build log text if provided
+    log_text = ""
+    if log_lines:
+        # Show last 5 lines
+        log_text = "\n".join(f"• {line}" for line in log_lines[-5:])
+        log_text = f"\n📜 **Battle Log:**\n{log_text}\n"
+    elif battle_queues.get(battle_id, {}).get('log'):
+        log_lines = battle_queues[battle_id]['log'][-5:]
+        log_text = "\n".join(f"• {line}" for line in log_lines)
+        log_text = f"\n📜 **Battle Log:**\n{log_text}\n"
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"⚔️ Attack (1 CP, 0 CE)", callback_data=f"bt_add_{battle_id}_attack_1_0")],
         [InlineKeyboardButton(text=f"🛡️ Defend (1 CP, 0 CE)", callback_data=f"bt_add_{battle_id}_defend_1_0")],
@@ -1290,7 +1310,8 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         f"❤️ HP: {enemy['hp']} {enemy_hp_bar}\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"🌀 Combo Points: {cp} (used: {used_cp})\n"
-        f"Select moves, then press Execute Combo."
+        f"Select moves, then press Execute Combo.\n"
+        f"{log_text}"
     )
 
     if isinstance(message_or_callback, types.Message):
@@ -1302,19 +1323,20 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
     else:
         callback = message_or_callback
         msg = callback.message
-        if msg.photo:
+        if msg.photo or msg.animation:
             media = InputMediaPhoto(media=enemy.get('image_url') or EFFECTS["default_domain"], caption=caption)
             await callback.message.edit_media(media=media, reply_markup=keyboard)
         else:
             await callback.message.edit_text(caption, reply_markup=keyboard)
 
+# Updated callback handler with fixed parsing for technique/domain
 @dp.callback_query(lambda c: c.data.startswith("bt_"))
 async def battle_turn_cb(callback: types.CallbackQuery):
     data = callback.data
     parts = data.split("_")
-    action = parts[1]  # 'add', 'tech', 'domain', 'execute', 'run', 'back', 'add_tech', 'add_domain'
+    action = parts[1]  # 'add', 'tech', 'domain', 'execute', 'run', 'back', 'addtech', 'adddomain'
 
-    # Determine battle_id and extra params based on action
+    # Determine battle_id and other params based on action
     if action == "add":
         battle_id = int(parts[2])
         move_type = parts[3]
@@ -1330,19 +1352,19 @@ async def battle_turn_cb(callback: types.CallbackQuery):
         battle_id = int(parts[2])
     elif action == "back":
         battle_id = int(parts[2])
-    elif action == "add_tech":
-        # bt_add_tech_{battle_id}_{cp_cost}_{ce_cost}_{tech_name}
-        battle_id = int(parts[3])
-        cp_cost = int(parts[4])
-        ce_cost = int(parts[5])
-        tech_name = "_".join(parts[6:])
-    elif action == "add_domain":
-        # bt_add_domain_{battle_id}_{cp_cost}_{ce_cost}_{dmg_mult}_{domain_name}
-        battle_id = int(parts[3])
-        cp_cost = int(parts[4])
-        ce_cost = int(parts[5])
-        dmg_mult = float(parts[6])
-        domain_name = "_".join(parts[7:])
+    elif action == "addtech":
+        # bt_addtech_{battle_id}_{cp_cost}_{ce_cost}_{tech_name}
+        battle_id = int(parts[2])
+        cp_cost = int(parts[3])
+        ce_cost = int(parts[4])
+        tech_name = " ".join(parts[5:]).replace('_', ' ')
+    elif action == "adddomain":
+        # bt_adddomain_{battle_id}_{cp_cost}_{ce_cost}_{dmg_mult}_{domain_name}
+        battle_id = int(parts[2])
+        cp_cost = int(parts[3])
+        ce_cost = int(parts[4])
+        dmg_mult = float(parts[5])
+        domain_name = " ".join(parts[6:]).replace('_', ' ')
     else:
         await callback.answer("Unknown action.", show_alert=True)
         return
@@ -1371,7 +1393,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
 
         # Ensure queue entry for this user
         if battle_id not in battle_queues:
-            battle_queues[battle_id] = {"participants": {}, "current_hp": enemy['hp']}
+            battle_queues[battle_id] = {"participants": {}, "current_hp": enemy['hp'], "log": []}
         if user_id not in battle_queues[battle_id]['participants']:
             battle_queues[battle_id]['participants'][user_id] = []
         queue = battle_queues[battle_id]['participants'][user_id]
@@ -1379,11 +1401,11 @@ async def battle_turn_cb(callback: types.CallbackQuery):
         # Handle each action
         if action == "add":
             cp = get_combo_points(player['level'])
-            used_cp = sum(m['cp_cost'] for m in queue)
+            used_cp = sum(m.get('cp_cost', 0) for m in queue)
             if used_cp + cp_cost > cp:
                 await callback.answer(f"Not enough Combo Points! (Used {used_cp}/{cp})", show_alert=True)
                 return
-            total_ce = sum(m['ce_cost'] for m in queue) + ce_cost
+            total_ce = sum(m.get('ce_cost', 0) for m in queue) + ce_cost
             if player['ce'] < total_ce:
                 await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
                 return
@@ -1403,7 +1425,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 if tech:
                     ce_cost = tech['ce_cost']
                     cp_cost = 2
-                    buttons.append([InlineKeyboardButton(text=f"🌀 {t} ({cp_cost} CP, {ce_cost} CE)", callback_data=f"bt_add_tech_{battle_id}_{cp_cost}_{ce_cost}_{t}")])
+                    buttons.append([InlineKeyboardButton(text=f"🌀 {t} ({cp_cost} CP, {ce_cost} CE)", callback_data=f"bt_addtech_{battle_id}_{cp_cost}_{ce_cost}_{t.replace(' ', '_')}")])
             buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bt_back_{battle_id}")])
             markup = InlineKeyboardMarkup(inline_keyboard=buttons)
             await callback.message.edit_text(
@@ -1432,7 +1454,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     else:
                         continue
                 cp_cost = 3
-                buttons.append([InlineKeyboardButton(text=f"🌐 {d} ({cp_cost} CP, {ce_cost} CE, {dmg_mult}x)", callback_data=f"bt_add_domain_{battle_id}_{cp_cost}_{ce_cost}_{dmg_mult}_{d}")])
+                buttons.append([InlineKeyboardButton(text=f"🌐 {d} ({cp_cost} CP, {ce_cost} CE, {dmg_mult}x)", callback_data=f"bt_adddomain_{battle_id}_{cp_cost}_{ce_cost}_{dmg_mult}_{d.replace(' ', '_')}")])
             buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"bt_back_{battle_id}")])
             markup = InlineKeyboardMarkup(inline_keyboard=buttons)
             await callback.message.edit_text(
@@ -1450,7 +1472,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             if not queue:
                 await callback.answer("No moves in queue!", show_alert=True)
                 return
-            total_ce = sum(m['ce_cost'] for m in queue)
+            total_ce = sum(m.get('ce_cost', 0) for m in queue)
             if player['ce'] < total_ce:
                 await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
                 return
@@ -1519,6 +1541,11 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             new_player_hp = max(0, battle['current_hp1'] - enemy_dmg)
             await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_player_hp, battle_id)
             player['hp'] = new_player_hp
+
+            # Append log to battle queue
+            battle_queues[battle_id]['log'].extend(exec_log)
+            if len(battle_queues[battle_id]['log']) > 10:
+                battle_queues[battle_id]['log'] = battle_queues[battle_id]['log'][-10:]
 
             # Clear queue for this user
             battle_queues[battle_id]['participants'][user_id] = []
@@ -1645,7 +1672,8 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             else:
                 # Continue battle
                 enemy['hp'] = new_enemy_hp
-                await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
+                log_lines = battle_queues[battle_id].get('log', [])
+                await show_battle_turn(callback, battle_id, player, enemy, vow_effects, log_lines)
                 await callback.answer("Combo executed!")
 
         elif action == "run":
@@ -1674,38 +1702,11 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     await callback.answer("Defeated! 💀")
                     return
                 player['hp'] = new_hp
-                await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
+                log_lines = battle_queues[battle_id].get('log', [])
+                await show_battle_turn(callback, battle_id, player, enemy, vow_effects, log_lines)
                 await callback.answer("Failed to escape! Enemy attacked.")
 
-        elif action == "add_tech":
-            cp = get_combo_points(player['level'])
-            used_cp = sum(m['cp_cost'] for m in queue)
-            if used_cp + cp_cost > cp:
-                await callback.answer(f"Not enough Combo Points! (Used {used_cp}/{cp})", show_alert=True)
-                return
-            total_ce = sum(m['ce_cost'] for m in queue) + ce_cost
-            if player['ce'] < total_ce:
-                await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
-                return
-            move = {"type": "technique", "cp_cost": cp_cost, "ce_cost": ce_cost, "tech_name": tech_name}
-            queue.append(move)
-            await callback.answer(f"Added {tech_name}!")
-            await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
-
-        elif action == "add_domain":
-            cp = get_combo_points(player['level'])
-            used_cp = sum(m['cp_cost'] for m in queue)
-            if used_cp + cp_cost > cp:
-                await callback.answer(f"Not enough Combo Points! (Used {used_cp}/{cp})", show_alert=True)
-                return
-            total_ce = sum(m['ce_cost'] for m in queue) + ce_cost
-            if player['ce'] < total_ce:
-                await callback.answer(f"Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
-                return
-            move = {"type": "domain", "cp_cost": cp_cost, "ce_cost": ce_cost, "domain_name": domain_name, "dmg_mult": dmg_mult}
-            queue.append(move)
-            await callback.answer(f"Added {domain_name}!")
-            await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
+        # The addtech and adddomain actions are handled above in the main parsing
 
 # ------------------------------------------------------------
 # RAID COMMANDS (Multiplayer)
@@ -1759,7 +1760,7 @@ async def raid_cmd(message: types.Message):
         for mid in member_ids:
             ongoing_battles[mid] = battle_id
         battle_queues[battle_id] = {"participants": {mid: [] for mid in member_ids}, 
-                                    "current_hp": enemy['hp'], "raid": True}
+                                    "current_hp": enemy['hp'], "raid": True, "log": []}
         await message.reply_animation(animation=EFFECTS["clan_raid"])
         await message.reply(
             f"👑 **CLAN RAID STARTED!**\n"
@@ -1932,9 +1933,10 @@ async def resume_cmd(message: types.Message):
             "max_hp": battle['enemy_max_hp']
         }
         if battle_id not in battle_queues:
-            battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp']}
+            battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp'], "log": []}
         vows = json.loads(battle.get('vow_effects', '[]'))
-        await show_battle_turn(message, battle_id, player, enemy, vows)
+        log_lines = battle_queues[battle_id].get('log', [])
+        await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)
 
 @dp.message(Command("prestige"))
 async def prestige_cmd(message: types.Message):
@@ -2223,7 +2225,6 @@ async def clan_cmd(message: types.Message):
             await conn.execute("UPDATE players SET clan_id = NULL, clan_rank = 'Member' WHERE user_id = $1", user_id)
             await message.reply("✅ You left the clan.")
         elif action == "raid":
-            # This is now handled by /raid
             await message.reply("Use `/raid` to start a clan raid.")
         else:
             await message.reply("Unknown action. Use create, join, info, leave, or raid.")
@@ -2343,7 +2344,7 @@ async def dungeon_cmd(message: types.Message):
            enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
            json.dumps([]), run_id)
         ongoing_battles[user_id] = battle_id
-        battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp']}
+        battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp'], "log": []}
         await show_battle_turn(message, battle_id, player, enemy, [])
 
 @dp.message(Command("tower"))
@@ -2403,7 +2404,7 @@ async def tower_cmd(message: types.Message):
            is_boss, enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
            json.dumps([]), run_id, floor)
         ongoing_battles[user_id] = battle_id
-        battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp']}
+        battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp'], "log": []}
         await show_battle_turn(message, battle_id, player, enemy, [])
 
 @dp.message(Command("achievements"))
