@@ -1584,7 +1584,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             battle_queues[battle_id]['participants'][user_id] = []
 
             if new_enemy_hp <= 0:
-                # Victory
+                # --- VICTORY ---
                 is_boss = battle['is_boss']
                 is_story = battle.get('is_story', False)
                 chapter_id = battle.get('chapter_id')
@@ -1666,11 +1666,14 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         else:
                             await callback.message.reply(f"🗼 You climb to floor {floor+1}!")
 
+                # --- Show full battle log in victory summary ---
+                full_log = battle_queues[battle_id].get('log', [])
+                log_summary = "\n".join(f"• {line}" for line in full_log[-10:])  # show last 10 lines
                 summary = (
                     f"🎉 **VICTORY!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"**Battle Log:**\n" + "\n".join(exec_log) +
-                    f"\n━━━━━━━━━━━━━━━━━━━\n"
+                    f"**Battle Log:**\n{log_summary}\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
                     f"❤️ Your HP: {new_player_hp}  |  💀 {enemy['name']} HP: 0\n"
                     f"💰 +¥{yen_reward}\n"
                     f"⭐ +{xp_reward} XP"
@@ -1684,13 +1687,16 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 return
 
             elif new_player_hp <= 0:
+                # --- DEFEAT ---
                 await callback.message.reply_animation(animation=EFFECTS["defeat"])
                 await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
+                full_log = battle_queues[battle_id].get('log', [])
+                log_summary = "\n".join(f"• {line}" for line in full_log[-10:])
                 summary = (
                     f"💀 **DEFEAT!**\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"**Battle Log:**\n" + "\n".join(exec_log) +
-                    f"\n━━━━━━━━━━━━━━━━━━━\n"
+                    f"**Battle Log:**\n{log_summary}\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
                     f"❤️ Your HP: 0  |  💀 {enemy['name']} HP: {new_enemy_hp}\n"
                     f"Better luck next time!"
                 )
@@ -1703,7 +1709,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 return
 
             else:
-                # Continue battle
+                # Continue battle – show updated log
                 enemy['hp'] = new_enemy_hp
                 log_lines = battle_queues[battle_id].get('log', [])
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects, log_lines)
