@@ -299,12 +299,12 @@ async def on_shutdown():
     print("✅ Database closed!")
 
 # ------------------------------------------------------------
-# ERROR HANDLER DECORATOR
+# FIXED ERROR HANDLER DECORATOR
 # ------------------------------------------------------------
 def friendly_error(func):
-    async def wrapper(message, *args, **kwargs):
+    async def wrapper(message: types.Message, *args, **kwargs):
         try:
-            return await func(message, *args, **kwargs)
+            return await func(message)   # only pass the message
         except Exception as e:
             logging.error(f"Error in {func.__name__}: {traceback.format_exc()}")
             await message.reply(f"❌ **Oops! Something went wrong.**\n\n"
@@ -2080,7 +2080,6 @@ async def pvp_move(message: types.Message):
         ])
         await message.reply("Select your moves for this turn:", reply_markup=keyboard)
 
-# PVP callbacks
 @dp.callback_query(lambda c: c.data.startswith("pvp_"))
 async def pvp_callback(callback: types.CallbackQuery):
     data = callback.data
@@ -2944,7 +2943,7 @@ async def commands_cmd(message: types.Message):
     )
 
 # ------------------------------------------------------------
-# OWNER / ADMIN COMMANDS (yen, xp, level, rank)
+# OWNER / ADMIN COMMANDS
 # ------------------------------------------------------------
 @dp.message(Command("addyen"))
 @friendly_error
