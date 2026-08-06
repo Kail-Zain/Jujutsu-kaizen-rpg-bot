@@ -304,7 +304,7 @@ async def on_shutdown():
 def friendly_error(func):
     async def wrapper(message: types.Message, *args, **kwargs):
         try:
-            return await func(message)   # only pass the message
+            return await func(message)
         except Exception as e:
             logging.error(f"Error in {func.__name__}: {traceback.format_exc()}")
             await message.reply(f"❌ **Oops! Something went wrong.**\n\n"
@@ -313,35 +313,39 @@ def friendly_error(func):
     return wrapper
 
 # ================================================================
-# COMMANDS
+# FIXED /start – connection stays inside block
 # ================================================================
-
 @dp.message(Command("start"))
 @friendly_error
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username or "Unknown"
     chat_id = message.chat.id
+
     async with db_pool.acquire() as conn:
         await conn.execute("""
             INSERT INTO players (user_id, username, chat_id)
             VALUES ($1, $2, $3)
             ON CONFLICT (user_id) DO UPDATE SET username = $2
         """, user_id, username, chat_id)
+
         await conn.execute("""
             INSERT INTO player_characters (player_id, character_name)
             VALUES ($1, 'Yuji Itadori')
             ON CONFLICT DO NOTHING
         """, user_id)
+
         player = await conn.fetchrow("SELECT domains FROM players WHERE user_id = $1", user_id)
         if player and player['domains']:
             unique = dedupe_domains(player['domains'])
             await conn.execute("UPDATE players SET domains = $1 WHERE user_id = $2", unique, user_id)
+
         await conn.execute("UPDATE players SET last_ce_regen = NOW() WHERE user_id = $1 AND last_ce_regen IS NULL", user_id)
         await conn.execute("UPDATE players SET in_battle = FALSE WHERE user_id = $1", user_id)
         await update_player_stats(user_id)
 
-    player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
+        player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🧙 Profile", callback_data="welcome_profile"),
          InlineKeyboardButton(text="⚔️ Battle", callback_data="welcome_battle")],
@@ -1503,7 +1507,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 battle_queues[battle_id]['participants'][user_id] = []
             queue = battle_queues[battle_id]['participants'][user_id]
 
-            # Add
             if action == "add":
                 cp = get_combo_points(player['level'])
                 used_cp = sum(m.get('cp_cost', 0) for m in queue)
@@ -1519,7 +1522,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await callback.answer(f"✅ Added {move_type}!")
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
 
-            # Tech
             elif action == "tech":
                 techs = player.get('techniques') or []
                 if not techs:
@@ -1554,7 +1556,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 )
                 await callback.answer()
 
-            # Domain
             elif action == "domain":
                 domains = player.get('domains') or []
                 if not domains:
@@ -1579,7 +1580,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", d)
                     if domain:
                         ce_cost = domain['ce_cost']
-                        dmg_mult = domain['damage_multiplier']
+                        dmg_mult = float(domain['damage_multiplier']) if domain else 3.5
                     else:
                         domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", d)
                         if domain_item:
@@ -1601,12 +1602,10 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 )
                 await callback.answer()
 
-            # Back
             elif action == "back":
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
                 await callback.answer()
 
-            # Addtech
             elif action == "addtech":
                 tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", tech_name)
                 if tech and tech.get('character_name') is not None and tech['character_name'] != player.get('character_name'):
@@ -1626,7 +1625,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await callback.answer(f"✅ Added {tech_name}!")
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
 
-            # Adddomain
             elif action == "adddomain":
                 domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", domain_name)
                 if domain and domain.get('character_name') is not None and domain['character_name'] != player.get('character_name'):
@@ -1646,7 +1644,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await callback.answer(f"✅ Added {domain_name}!")
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
 
-            # Execute
             elif action == "execute":
                 if not queue:
                     await callback.answer("❌ No moves in queue!", show_alert=True)
@@ -1679,7 +1676,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         tech_name = move.get('tech_name')
                         tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", tech_name)
                         if tech:
-                            dmg = max(1, int(player['atk'] * tech['damage_multiplier'] * random.uniform(0.9, 1.1)))
+                            dmg = max(1, int(player['atk'] * float(tech['damage_multiplier']) * random.uniform(0.9, 1.1)))
                             total_damage += dmg
                             exec_log.append(f"🌀 {tech_name}: {dmg} damage")
                             if "Purple" in tech_name:
@@ -1693,7 +1690,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     elif mtype == 'domain':
                         domain_name = move.get('domain_name')
                         dmg_mult = move.get('dmg_mult', 3.5)
-                        dmg = max(1, int(player['atk'] * dmg_mult * random.uniform(0.9, 1.1)))
+                        dmg = max(1, int(player['atk'] * float(dmg_mult) * random.uniform(0.9, 1.1)))
                         total_damage += dmg
                         exec_log.append(f"🌐 **Domain: {domain_name}** (Sure-Hit, {dmg} damage)")
                         if "Unlimited Void" in domain_name:
@@ -1874,7 +1871,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await show_battle_turn(callback, battle_id, player, enemy, vow_effects, log_lines)
                 await callback.answer("✅ Combo executed!")
 
-            # Run
             elif action == "run":
                 if random.random() < 0.6:
                     await callback.message.edit_text("🏃 You successfully escaped!")
@@ -2168,7 +2164,7 @@ async def pvp_callback(callback: types.CallbackQuery):
                     domain = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1 AND category = 'domain'", d)
                     if domain:
                         ce_cost = domain['ce_cost']
-                        dmg_mult = domain['damage_multiplier']
+                        dmg_mult = float(domain['damage_multiplier']) if domain else 3.5
                     else:
                         domain_item = await conn.fetchrow("SELECT * FROM shop_items WHERE name = $1 AND category = 'domain'", d)
                         if domain_item:
@@ -2263,9 +2259,9 @@ async def pvp_end_turn(message, battle_id, user_id):
             elif move['type'] == 'technique':
                 tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", move.get('tech_name'))
                 if tech:
-                    total_damage += max(1, int(player['atk'] * tech['damage_multiplier'] * random.uniform(0.9, 1.1)))
+                    total_damage += max(1, int(player['atk'] * float(tech['damage_multiplier']) * random.uniform(0.9, 1.1)))
             elif move['type'] == 'domain':
-                total_damage += max(1, int(player['atk'] * move.get('dmg_mult', 3.5) * random.uniform(0.9, 1.1)))
+                total_damage += max(1, int(player['atk'] * float(move.get('dmg_mult', 3.5)) * random.uniform(0.9, 1.1)))
         if user_id == battle['player1_id']:
             new_hp = max(0, battle['current_hp2'] - total_damage)
             await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", new_hp, battle_id)
@@ -3133,7 +3129,7 @@ async def recalc_cmd(message: types.Message):
             await message.reply(f"✅ Recalculated all {len(players)} players.")
 
 # ------------------------------------------------------------
-# DIAGNOSIS
+# REAL‑TIME DIAGNOSIS (enhanced)
 # ------------------------------------------------------------
 @dp.message(Command("diagnosis"))
 @friendly_error
@@ -3146,18 +3142,27 @@ async def diagnosis_cmd(message: types.Message):
     report.append("🔍 **CURSED CHRONICLES – SYSTEM DIAGNOSIS**")
     report.append(f"🕒 Timestamp: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`")
     report.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    report.append("📊 *All data below is fetched in real‑time.*")
 
+    # 1. Environment
     report.append("\n🌐 **ENVIRONMENT**")
-    env_vars = ["BOT_TOKEN", "DATABASE_URL"]
+    env_vars = ["BOT_TOKEN", "DATABASE_URL", "OWNER_ID"]
     for var in env_vars:
-        value = "✅ Set" if os.getenv(var) else "❌ Missing"
+        if var == "OWNER_ID":
+            value = f"`{OWNER_ID}`" if OWNER_ID else "❌ Not set"
+        else:
+            value = "✅ Set" if os.getenv(var) else "❌ Missing"
         report.append(f"• {var}: {value}")
 
+    # 2. Database
     report.append("\n🗄️ **DATABASE**")
     try:
         async with db_pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
-            report.append("• Connection: ✅ OK")
+            # Test connection
+            test = await conn.fetchval("SELECT 1")
+            report.append("• Connection: ✅ OK" if test == 1 else "❌ Failed")
+
+            # Count all tables
             tables = [
                 "players", "characters", "shop_items", "techniques", "enemies",
                 "battles", "clans", "player_characters", "player_missions",
@@ -3167,19 +3172,29 @@ async def diagnosis_cmd(message: types.Message):
                 "events", "clan_wars", "quests", "player_quests",
                 "materials", "player_materials", "recipes"
             ]
+            table_counts = {}
             for table in tables:
                 try:
                     count = await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
-                    report.append(f"• Table `{table}`: ✅ {count} rows")
+                    table_counts[table] = count
                 except Exception as e:
-                    report.append(f"• Table `{table}`: ❌ Error – {str(e)[:50]}")
+                    table_counts[table] = f"Error: {str(e)[:30]}"
+
+            for table, count in table_counts.items():
+                if isinstance(count, int):
+                    report.append(f"• Table `{table}`: ✅ {count} rows")
+                else:
+                    report.append(f"• Table `{table}`: ❌ {count}")
+
             total_players = await conn.fetchval("SELECT COUNT(*) FROM players")
-            report.append(f"• Total players: {total_players}")
             active_battles_db = await conn.fetchval("SELECT COUNT(*) FROM battles WHERE status = 'active'")
+            report.append(f"• Total players: {total_players}")
             report.append(f"• Active battles (DB): {active_battles_db}")
+
     except Exception as e:
         report.append(f"❌ Database error: {e}")
 
+    # 3. Global state
     report.append("\n🧠 **GLOBAL STATE (IN‑MEMORY)**")
     report.append(f"• `ongoing_battles`: {len(ongoing_battles)} entries")
     report.append(f"• `battle_queues`: {len(battle_queues)} entries")
