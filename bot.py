@@ -1,6 +1,6 @@
 # ================================================================
 #                 CURSED CHRONICLES – COMPLETE BOT
-#                 ALL FEATURES – NO PLACEHOLDERS
+#                 ALL FEATURES – USER ISOLATION FIXED
 # ================================================================
 
 import asyncio
@@ -783,6 +783,8 @@ async def char_buy_cb(callback: types.CallbackQuery):
                                         user_id, char['name'])
             if owned:
                 await callback.answer("❌ You already own this character!", show_alert=True)
+                # Refresh the page to show owned status
+                await send_char_page(callback, int(parts[2]) if len(parts) > 2 else 0)
                 return
             if not free:
                 player = await conn.fetchrow("SELECT yen FROM players WHERE user_id = $1", user_id)
@@ -794,9 +796,11 @@ async def char_buy_cb(callback: types.CallbackQuery):
                                    user_id, char['name'])
                 await callback.answer(f"✅ Bought {char['name']}!")
             else:
+                # Free character – insert
                 await conn.execute("INSERT INTO player_characters (player_id, character_name) VALUES ($1, $2)",
                                    user_id, char['name'])
                 await callback.answer(f"✅ Got {char['name']} for free!")
+            # Refresh the page
             await send_char_page(callback, 0)
     except Exception as e:
         await callback.answer(f"❌ Error: {str(e)[:100]}", show_alert=True)
