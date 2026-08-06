@@ -240,7 +240,22 @@ async def update_player_stats(user_id):
         """, new_level, new_max_hp, new_max_ce, new_atk, new_def, new_spd, new_hp, new_ce, user_id)
 
 # ------------------------------------------------------------
-# MESSAGE EDITING HELPER
+# SAFE MEDIA SENDING (prevents errors from invalid URLs)
+# ------------------------------------------------------------
+async def safe_send_media(message, media_type, media_url, caption=None, reply_markup=None):
+    """Safely send media, fallback to text if URL fails."""
+    try:
+        if media_type == 'photo':
+            await message.reply_photo(photo=media_url, caption=caption, reply_markup=reply_markup)
+        elif media_type == 'animation':
+            await message.reply_animation(animation=media_url, caption=caption, reply_markup=reply_markup)
+        else:
+            await message.reply(caption or "⚠️ Media unavailable.", reply_markup=reply_markup)
+    except Exception as e:
+        await message.reply(caption or f"⚠️ Media unavailable ({str(e)[:50]})", reply_markup=reply_markup)
+
+# ------------------------------------------------------------
+# MESSAGE EDITING HELPER (safe)
 # ------------------------------------------------------------
 async def edit_battle_message(callback: types.CallbackQuery, caption: str, reply_markup=None, media_url=None):
     try:
@@ -506,13 +521,11 @@ async def restriction_cmd(message: types.Message):
         if choice == 'toji':
             await conn.execute("UPDATE players SET restriction = 'toji' WHERE user_id = $1", user_id)
             await update_player_stats(user_id)
-            await message.reply_animation(animation=EFFECTS["heavenly_restriction"])
-            await message.reply("🔒 **Heavenly Restriction: Toji Type**\nCE → 0, ATK/DEF/SPD ×2.")
+            await safe_send_media(message, 'animation', EFFECTS["heavenly_restriction"], caption="🔒 **Heavenly Restriction: Toji Type**\nCE → 0, ATK/DEF/SPD ×2.")
         elif choice == 'maki':
             await conn.execute("UPDATE players SET restriction = 'maki' WHERE user_id = $1", user_id)
             await update_player_stats(user_id)
-            await message.reply_animation(animation=EFFECTS["heavenly_restriction"])
-            await message.reply("🔒 **Heavenly Restriction: Maki Type**\nWeapon mastery: +50% ATK from equipped weapons.")
+            await safe_send_media(message, 'animation', EFFECTS["heavenly_restriction"], caption="🔒 **Heavenly Restriction: Maki Type**\nWeapon mastery: +50% ATK from equipped weapons.")
         else:
             await message.reply("❌ Invalid restriction. Choose 'toji' or 'maki'.")
 
@@ -587,8 +600,7 @@ async def shikigami_cmd(message: types.Message):
             if not owned:
                 await message.reply(f"You don't own {shikigami['name']}. Defeat bosses to unlock.")
                 return
-            await message.reply_animation(animation=EFFECTS["shikigami_summon"])
-            await message.reply(f"🌀 **{shikigami['name']} summoned!**\nEffect: {shikigami['effect']}")
+            await safe_send_media(message, 'animation', EFFECTS["shikigami_summon"], caption=f"🌀 **{shikigami['name']} summoned!**\nEffect: {shikigami['effect']}")
         else:
             await message.reply("Unknown subcommand. Use `/shikigami` to list or `/shikigami summon [name]`.")
 
@@ -647,9 +659,9 @@ async def profile_cmd(message: types.Message):
                 f"{YEN_PURCHASE_INFO}"
             )
             if awakening != "None":
-                await message.reply_animation(animation=EFFECTS["awakening"], caption=caption)
+                await safe_send_media(message, 'animation', EFFECTS["awakening"], caption=caption)
             elif image_url:
-                await message.reply_photo(photo=image_url, caption=caption)
+                await safe_send_media(message, 'photo', image_url, caption=caption)
             else:
                 await message.reply(caption)
     except Exception as e:
@@ -718,7 +730,7 @@ async def send_char_page(message_or_callback, page):
             if isinstance(message_or_callback, types.Message):
                 msg = message_or_callback
                 if char.get('image_url'):
-                    await msg.reply_photo(photo=char['image_url'], caption=caption, reply_markup=keyboard)
+                    await safe_send_media(msg, 'photo', char['image_url'], caption=caption, reply_markup=keyboard)
                 else:
                     await msg.reply(caption, reply_markup=keyboard)
             else:
@@ -1045,7 +1057,7 @@ async def use_cmd(message: types.Message):
             await conn.execute("UPDATE players SET bag = array_remove(bag, $1) WHERE user_id = $2",
                                item_name, user_id)
             if 'heal_hp' in effects or 'heal_ce' in effects or 'heal_full' in effects:
-                await message.reply_animation(animation=EFFECTS["heal"], caption=response)
+                await safe_send_media(message, 'animation', EFFECTS["heal"], caption=response)
             else:
                 await message.reply(response)
     except Exception as e:
@@ -1116,8 +1128,10 @@ async def learn_cmd(message: types.Message):
                     matched_tech = t
                     break
             if matched_tech:
-                await message.reply_animation(
-                    animation=EFFECTS["cursed_energy"],
+                await safe_send_media(
+                    message,
+                    'animation',
+                    EFFECTS["cursed_energy"],
                     caption=f"🌀 **{matched_tech}** is ready to use in battle!\nUse the 'Technique' button."
                 )
                 return
@@ -1235,8 +1249,7 @@ async def story_chapter_cmd(message: types.Message):
                 if not prev_done:
                     await message.reply(f"❌ You must complete Chapter {chapter_num - 1} first.")
                     return
-        await message.reply_animation(animation=EFFECTS["story_boss"])
-        await message.reply(f"⚔️ **Story Chapter {chapter_num}: {chapter['title']}**\nBoss: {chapter['boss_name']}\nDefeat it to claim your rewards!")
+        await safe_send_media(message, 'animation', EFFECTS["story_boss"], caption=f"⚔️ **Story Chapter {chapter_num}: {chapter['title']}**\nBoss: {chapter['boss_name']}\nDefeat it to claim your rewards!")
         await boss_cmd(message, chapter['boss_name'], is_story=True, chapter_id=chapter['id'])
 
 # ------------------------------------------------------------
@@ -1273,7 +1286,7 @@ async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool
                 await message.reply(f"Boss '{boss_name}' not found.")
                 return
             enemy = scale_enemy_to_player(player, enemy_base)
-            await message.reply_animation(animation=EFFECTS["versus"])
+            await safe_send_media(message, 'animation', EFFECTS["versus"])
             battle_id = await conn.fetchval("""
                 INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
                                      enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
@@ -1328,7 +1341,7 @@ async def battle_cmd(message: types.Message):
                 await message.reply("No enemies available!")
                 return
             enemy = scale_enemy_to_player(player, enemy_base)
-            await message.reply_animation(animation=EFFECTS["versus"])
+            await safe_send_media(message, 'animation', EFFECTS["versus"])
             battle_id = await conn.fetchval("""
                 INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
                                      enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
@@ -1400,7 +1413,7 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
     if isinstance(message_or_callback, types.Message):
         msg = message_or_callback
         if enemy.get('image_url'):
-            await msg.reply_photo(photo=enemy['image_url'], caption=caption, reply_markup=keyboard)
+            await safe_send_media(msg, 'photo', enemy['image_url'], caption=caption, reply_markup=keyboard)
         else:
             await msg.reply(caption, reply_markup=keyboard)
     else:
@@ -1680,13 +1693,13 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         total_damage += dmg
                         exec_log.append(f"🌀 {tech_name}: {dmg} damage")
                         if "Purple" in tech_name:
-                            await callback.message.reply_animation(animation=EFFECTS["gojo_purple"])
+                            await safe_send_media(callback.message, 'animation', EFFECTS["gojo_purple"])
                         elif "Red" in tech_name:
-                            await callback.message.reply_animation(animation=EFFECTS["gojo_red"])
+                            await safe_send_media(callback.message, 'animation', EFFECTS["gojo_red"])
                         elif "Blue" in tech_name:
-                            await callback.message.reply_animation(animation=EFFECTS["gojo_blue"])
+                            await safe_send_media(callback.message, 'animation', EFFECTS["gojo_blue"])
                         else:
-                            await callback.message.reply_animation(animation=EFFECTS["cursed_energy"])
+                            await safe_send_media(callback.message, 'animation', EFFECTS["cursed_energy"])
                 elif mtype == 'domain':
                     domain_name = move.get('domain_name')
                     dmg_mult = move.get('dmg_mult', 3.5)
@@ -1694,13 +1707,13 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     total_damage += dmg
                     exec_log.append(f"🌐 **Domain: {domain_name}** (Sure-Hit, {dmg} damage)")
                     if "Unlimited Void" in domain_name:
-                        await callback.message.reply_animation(animation=EFFECTS["gojo_unlimited_void"])
+                        await safe_send_media(callback.message, 'animation', EFFECTS["gojo_unlimited_void"])
                     elif "Malevolent" in domain_name:
-                        await callback.message.reply_animation(animation=EFFECTS["sukuna_domain"])
+                        await safe_send_media(callback.message, 'animation', EFFECTS["sukuna_domain"])
                     elif "Mahito" in domain_name or "Self" in domain_name:
-                        await callback.message.reply_animation(animation=EFFECTS["mahito_domain"])
+                        await safe_send_media(callback.message, 'animation', EFFECTS["mahito_domain"])
                     else:
-                        await callback.message.reply_animation(animation=EFFECTS["default_domain"])
+                        await safe_send_media(callback.message, 'animation', EFFECTS["default_domain"])
 
             if battle.get('is_pvp'):
                 other_id = battle['player1_id'] if user_id == battle['player2_id'] else battle['player2_id']
@@ -1739,7 +1752,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
             if battle.get('is_pvp'):
                 other_hp = battle_queues[battle_id]['current_hp']
                 if other_hp <= 0:
-                    await callback.message.reply_animation(animation=EFFECTS["victory_normal"])
+                    await safe_send_media(callback.message, 'animation', EFFECTS["victory_normal"])
                     winner_id = user_id
                     loser_id = other_id
                     await conn.execute("UPDATE players SET wins = wins + 1, yen = yen + 1000, xp = xp + 500 WHERE user_id = $1", winner_id)
@@ -1760,7 +1773,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     is_story = battle.get('is_story', False)
                     chapter_id = battle.get('chapter_id')
                     victory_effect = EFFECTS["victory_boss"] if is_boss else EFFECTS["victory_normal"]
-                    await callback.message.reply_animation(animation=victory_effect)
+                    await safe_send_media(callback.message, 'animation', victory_effect)
                     yen_reward = battle['enemy_reward_yen'] or 1000
                     xp_reward = battle['enemy_reward_xp'] or 100
                     boss_kill_inc = 1 if is_boss else 0
@@ -1793,8 +1806,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                                 break
                         if new_domain:
                             await conn.execute("UPDATE players SET domains = array_append(domains, $1) WHERE user_id = $2", new_domain, player['user_id'])
-                            await callback.message.reply_animation(animation=EFFECTS["awakening"])
-                            await callback.message.reply(f"🌐 **Domain Unlocked!** You gained **{new_domain}**!")
+                            await safe_send_media(callback.message, 'animation', EFFECTS["awakening"], caption=f"🌐 **Domain Unlocked!** You gained **{new_domain}**!")
 
                     if is_boss:
                         boss_kills = player['boss_kills'] + 1
@@ -1812,8 +1824,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                             new_rank = "Grade 4"
                         if new_rank != player.get('curse_rank'):
                             await conn.execute("UPDATE players SET curse_rank = $1, curse_evolution_count = curse_evolution_count + 1 WHERE user_id = $2", new_rank, user_id)
-                            await callback.message.reply_animation(animation=EFFECTS["curse_evolution"])
-                            await callback.message.reply(f"👹 **Curse Evolution!** You evolved to {new_rank}!")
+                            await safe_send_media(callback.message, 'animation', EFFECTS["curse_evolution"], caption=f"👹 **Curse Evolution!** You evolved to {new_rank}!")
                             if new_rank in ["Special Grade", "Disaster Curse"]:
                                 await conn.execute("UPDATE players SET curse_regen = TRUE WHERE user_id = $1", user_id)
                                 await callback.message.reply("You now have passive regeneration out of battle.")
@@ -1852,7 +1863,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     return
 
             if new_player_hp <= 0:
-                await callback.message.reply_animation(animation=EFFECTS["defeat"])
+                await safe_send_media(callback.message, 'animation', EFFECTS["defeat"])
                 await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
                 full_log = battle_queues[battle_id].get('log', [])
                 log_summary = "\n".join(f"• {line}" for line in full_log[-10:])
@@ -1888,7 +1899,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_hp, battle_id)
                 if new_hp <= 0:
                     await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", player['user_id'])
-                    await callback.message.reply_animation(animation=EFFECTS["defeat"])
+                    await safe_send_media(callback.message, 'animation', EFFECTS["defeat"])
                     await callback.message.edit_text("💀 **DEFEAT!**\nFailed to escape.")
                     if user_id in ongoing_battles: del ongoing_battles[user_id]
                     if battle_id in battle_queues: del battle_queues[battle_id]
@@ -1978,15 +1989,7 @@ async def prestige_cmd(message: types.Message):
                 hp = $4, ce = $5
             WHERE user_id = $9
         """, new_prestige, bonus_atk, bonus_hp, 100, 100, 10, 10, 10, user_id)
-        await message.reply_animation(animation=EFFECTS["awakening"])
-        await message.reply(
-            f"🌟 **Prestige Complete!**\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"Prestige Level: {new_prestige}/10\n"
-            f"Permanent ATK Bonus: +{bonus_atk}\n"
-            f"Permanent HP Bonus: +{bonus_hp}\n"
-            f"Level reset to 1. Good luck!"
-        )
+        await safe_send_media(message, 'animation', EFFECTS["awakening"], caption=f"🌟 **Prestige Complete!**\n━━━━━━━━━━━━━━━━━━━\nPrestige Level: {new_prestige}/10\nPermanent ATK Bonus: +{bonus_atk}\nPermanent HP Bonus: +{bonus_hp}\nLevel reset to 1. Good luck!")
 
 # ------------------------------------------------------------
 # PVP (full turn‑based)
@@ -2260,7 +2263,7 @@ async def pvp_end_turn(message, battle_id, user_id):
             elif move['type'] == 'special':
                 total_damage += max(1, int(player['atk'] * random.uniform(1.5, 2.5)))
             elif move['type'] == 'defend':
-                pass  # handled separately
+                pass
             elif move['type'] == 'technique':
                 tech = await conn.fetchrow("SELECT * FROM techniques WHERE name = $1", move.get('tech_name'))
                 if tech:
@@ -2615,14 +2618,7 @@ async def dungeon_cmd(message: types.Message):
         enemy['reward_yen'] = int(enemy['reward_yen'] * (1 + floor * 0.1))
         enemy['reward_xp'] = int(enemy['reward_xp'] * (1 + floor * 0.1))
         enemy['rank'] = f"Dungeon Floor {floor}"
-        await message.reply_animation(animation=EFFECTS["dungeon_clear"])
-        await message.reply(
-            f"🏰 **Dungeon – Floor {floor}**\n"
-            f"Enemy: {enemy['name']}\n"
-            f"HP: {enemy['hp']} | ATK: {enemy['atk']} | DEF: {enemy['def']}\n"
-            f"Reward: ¥{enemy['reward_yen']} + {enemy['reward_xp']} XP\n"
-            f"Defeat it to advance to the next floor!"
-        )
+        await safe_send_media(message, 'animation', EFFECTS["dungeon_clear"], caption=f"🏰 **Dungeon – Floor {floor}**\nEnemy: {enemy['name']}\nHP: {enemy['hp']} | ATK: {enemy['atk']} | DEF: {enemy['def']}\nReward: ¥{enemy['reward_yen']} + {enemy['reward_xp']} XP\nDefeat it to advance to the next floor!")
         battle_id = await conn.fetchval("""
             INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
                                  enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
@@ -2678,14 +2674,7 @@ async def tower_cmd(message: types.Message):
         enemy['reward_yen'] = int(enemy['reward_yen'] * (1 + floor * 0.05))
         enemy['reward_xp'] = int(enemy['reward_xp'] * (1 + floor * 0.05))
         enemy['rank'] = f"Tower Floor {floor}"
-        await message.reply_animation(animation=EFFECTS["tower_clear"])
-        await message.reply(
-            f"🗼 **Tower – Floor {floor}/100**\n"
-            f"Enemy: {enemy['name']} {'(BOSS)' if is_boss else ''}\n"
-            f"HP: {enemy['hp']} | ATK: {enemy['atk']} | DEF: {enemy['def']}\n"
-            f"Reward: ¥{enemy['reward_yen']} + {enemy['reward_xp']} XP\n"
-            f"Defeat it to climb higher!"
-        )
+        await safe_send_media(message, 'animation', EFFECTS["tower_clear"], caption=f"🗼 **Tower – Floor {floor}/100**\nEnemy: {enemy['name']} {'(BOSS)' if is_boss else ''}\nHP: {enemy['hp']} | ATK: {enemy['atk']} | DEF: {enemy['def']}\nReward: ¥{enemy['reward_yen']} + {enemy['reward_xp']} XP\nDefeat it to climb higher!")
         battle_id = await conn.fetchval("""
             INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
                                  enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
@@ -3184,7 +3173,7 @@ async def event_battle_cmd(message: types.Message):
         enemy['hp'] = int(enemy['hp'] * 1.5)
         enemy['reward_yen'] = int(enemy['reward_yen'] * 1.5)
         enemy['reward_xp'] = int(enemy['reward_xp'] * 1.5)
-        await message.reply_animation(animation=EFFECTS["clan_raid"])
+        await safe_send_media(message, 'animation', EFFECTS["clan_raid"])
         battle_id = await conn.fetchval("""
             INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2,
                                  enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
