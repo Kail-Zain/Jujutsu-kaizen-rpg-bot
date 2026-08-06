@@ -369,7 +369,6 @@ async def start_cmd(message: types.Message):
     await message.reply(msg, reply_markup=keyboard)
 
 @dp.callback_query(lambda c: c.data.startswith("welcome_"))
-@friendly_error
 async def welcome_cb(callback: types.CallbackQuery):
     action = callback.data.replace("welcome_", "")
     await callback.answer()
@@ -1354,7 +1353,6 @@ async def battle_cmd(message: types.Message):
     except Exception as e:
         await message.reply(f"❌ Error starting battle: {str(e)[:150]}")
 
-# show_battle_turn
 async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_effects=[], log_lines=None):
     cp = get_combo_points(player['level'])
     queue = battle_queues.get(battle_id, {}).get('participants', {}).get(player['user_id'], [])
@@ -1409,9 +1407,6 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         media_url = enemy.get('image_url') or EFFECTS["default_domain"]
         await edit_battle_message(callback, caption, keyboard, media_url)
 
-# ------------------------------------------------------------
-# BATTLE CALLBACK (bt|)
-# ------------------------------------------------------------
 @dp.callback_query(lambda c: c.data.startswith("bt|"))
 async def battle_turn_cb(callback: types.CallbackQuery):
     data = callback.data
@@ -2508,6 +2503,186 @@ async def clan_cmd(message: types.Message):
             await message.reply("❌ Unknown action. Use create, join, info, leave, upgrade, or war.")
 
 # ------------------------------------------------------------
+# RAID SYSTEM (Clan Raids)
+# ------------------------------------------------------------
+@dp.message(Command("raid"))
+@friendly_error
+async def raid_cmd(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in ongoing_battles:
+        await message.reply("⚠️ You already have an ongoing battle! Use `/status` or `/resume`.")
+        return
+    async with db_pool.acquire() as conn:
+        player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
+        if not player:
+            await message.reply("❌ Start with /start first!")
+            return
+        clan_id = player.get('clan_id')
+        if not clan_id:
+            await message.reply("❌ You must be in a clan to start a raid.")
+            return
+        clan_members = await conn.fetch("SELECT user_id FROM players WHERE clan_id = $1", clan_id)
+        if len(clan_members) < 2:
+            await message.reply("❌ Your clan needs at least 2 members to start a raid.")
+            return
+        enemy_base = await conn.fetchrow("SELECT * FROM enemies WHERE is_boss = TRUE ORDER BY RANDOM() LIMIT 1")
+        if not enemy_base:
+            await message.reply("❌ No bosses available!")
+            return
+        member_ids = [m['user_id'] for m in clan_members]
+        members = await conn.fetch("SELECT * FROM players WHERE user_id = ANY($1)", member_ids)
+        avg_atk = sum(m['atk'] for m in members) / len(members)
+        avg_def = sum(m['def'] for m in members) / len(members)
+        avg_hp = sum(m['max_hp'] for m in members) / len(members)
+        player_sample = {"atk": avg_atk, "def": avg_def, "max_hp": avg_hp, "level": player['level']}
+        enemy = scale_enemy_to_player(player_sample, enemy_base)
+        enemy['hp'] = int(enemy['hp'] * 1.5 * len(members))
+        enemy['max_hp'] = enemy['hp']
+        enemy['reward_yen'] = int(enemy['reward_yen'] * 1.5)
+        enemy['reward_xp'] = int(enemy['reward_xp'] * 1.5)
+
+        battle_id = await conn.fetchval("""
+            INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
+                                 enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
+                                 is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp,
+                                 vow_effects, participants, is_raid, raid_owner, max_participants)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10, $11, $12, $13, $14, TRUE, $15, $16)
+            RETURNING id
+        """, message.chat.id, user_id, 0, enemy['hp'], 
+           enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
+           enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
+           json.dumps([]), json.dumps(member_ids), user_id, len(member_ids))
+        for mid in member_ids:
+            ongoing_battles[mid] = battle_id
+        battle_queues[battle_id] = {"participants": {mid: [] for mid in member_ids}, 
+                                    "current_hp": enemy['hp'], "raid": True, "log": []}
+        await safe_send_media(message, 'animation', EFFECTS["clan_raid"])
+        await message.reply(
+            f"👑 **CLAN RAID STARTED!**\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"Boss: {enemy['name']} (HP: {enemy['hp']})\n"
+            f"All clan members can attack!\n"
+            f"Use `/raid_attack` to deal damage."
+        )
+        await show_raid_status(message, battle_id, enemy)
+
+@dp.message(Command("raid_attack"))
+@friendly_error
+async def raid_attack_cmd(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ongoing_battles:
+        await message.reply("❌ You are not in a battle.")
+        return
+    battle_id = ongoing_battles[user_id]
+    async with db_pool.acquire() as conn:
+        battle = await conn.fetchrow("SELECT * FROM battles WHERE id = $1", battle_id)
+        if not battle or battle['status'] != 'active':
+            await message.reply("❌ Battle is no longer active.")
+            return
+        if not battle.get('is_raid'):
+            await message.reply("❌ This is not a raid battle.")
+            return
+        player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
+        if not player:
+            return
+        dmg = max(1, int(player['atk'] * random.uniform(0.6, 1.2)))
+        new_hp = max(0, battle['current_hp2'] - dmg)
+        await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", new_hp, battle_id)
+        contrib = battle.get('contributions') or {}
+        if isinstance(contrib, str):
+            contrib = json.loads(contrib)
+        contrib[str(user_id)] = contrib.get(str(user_id), 0) + dmg
+        await conn.execute("UPDATE battles SET contributions = $1 WHERE id = $2", json.dumps(contrib), battle_id)
+        if new_hp <= 0:
+            participants = json.loads(battle['participants'])
+            for pid in participants:
+                reward_yen = int(battle['enemy_reward_yen'] / len(participants))
+                reward_xp = int(battle['enemy_reward_xp'] / len(participants))
+                await conn.execute("""
+                    UPDATE players SET yen = LEAST(yen + $1, $2), xp = xp + $3
+                    WHERE user_id = $4
+                """, reward_yen, MAX_YEN, reward_xp, pid)
+                await update_player_stats(pid)
+                if pid in ongoing_battles:
+                    del ongoing_battles[pid]
+            await conn.execute("UPDATE battles SET status = 'completed' WHERE id = $1", battle_id)
+            await message.reply(f"🎉 **Raid Boss Defeated!**\nAll participants earned rewards!")
+            if battle_id in battle_queues:
+                del battle_queues[battle_id]
+            return
+        battle_queues[battle_id]['current_hp'] = new_hp
+        await show_raid_status(message, battle_id, {"name": battle['enemy_name'], "hp": new_hp, "max_hp": battle['enemy_max_hp']})
+
+async def show_raid_status(message, battle_id, enemy):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚔️ Attack", callback_data=f"raid_attack_{battle_id}")],
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"raid_refresh_{battle_id}")]
+    ])
+    hp_bar = build_hp_bar(enemy['hp'], enemy['max_hp'])
+    caption = (
+        f"👑 **Raid Boss**\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"💀 {enemy['name']}\n"
+        f"❤️ HP: {enemy['hp']}/{enemy['max_hp']} {hp_bar}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"Click Attack to deal damage!"
+    )
+    await message.reply(caption, reply_markup=keyboard)
+
+@dp.callback_query(lambda c: c.data.startswith("raid_attack_"))
+async def raid_attack_cb(callback: types.CallbackQuery):
+    battle_id = int(callback.data.split("_")[2])
+    user_id = callback.from_user.id
+    async with db_pool.acquire() as conn:
+        battle = await conn.fetchrow("SELECT * FROM battles WHERE id = $1", battle_id)
+        if not battle or battle['status'] != 'active':
+            await callback.answer("❌ Battle ended.", show_alert=True)
+            return
+        player = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", user_id)
+        if not player:
+            return
+        dmg = max(1, int(player['atk'] * random.uniform(0.6, 1.2)))
+        new_hp = max(0, battle['current_hp2'] - dmg)
+        await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", new_hp, battle_id)
+        contrib = battle.get('contributions') or {}
+        if isinstance(contrib, str):
+            contrib = json.loads(contrib)
+        contrib[str(user_id)] = contrib.get(str(user_id), 0) + dmg
+        await conn.execute("UPDATE battles SET contributions = $1 WHERE id = $2", json.dumps(contrib), battle_id)
+        if new_hp <= 0:
+            participants = json.loads(battle['participants'])
+            for pid in participants:
+                reward_yen = int(battle['enemy_reward_yen'] / len(participants))
+                reward_xp = int(battle['enemy_reward_xp'] / len(participants))
+                await conn.execute("""
+                    UPDATE players SET yen = LEAST(yen + $1, $2), xp = xp + $3
+                    WHERE user_id = $4
+                """, reward_yen, MAX_YEN, reward_xp, pid)
+                await update_player_stats(pid)
+                if pid in ongoing_battles:
+                    del ongoing_battles[pid]
+            await conn.execute("UPDATE battles SET status = 'completed' WHERE id = $1", battle_id)
+            await callback.message.edit_text("🎉 **Raid Boss Defeated!** All participants earned rewards!")
+            if battle_id in battle_queues:
+                del battle_queues[battle_id]
+            await callback.answer("Victory!")
+            return
+        battle_queues[battle_id]['current_hp'] = new_hp
+        await callback.answer(f"✅ Dealt {dmg} damage!")
+        await show_raid_status(callback.message, battle_id, {"name": battle['enemy_name'], "hp": new_hp, "max_hp": battle['enemy_max_hp']})
+
+@dp.callback_query(lambda c: c.data.startswith("raid_refresh_"))
+async def raid_refresh_cb(callback: types.CallbackQuery):
+    battle_id = int(callback.data.split("_")[2])
+    async with db_pool.acquire() as conn:
+        battle = await conn.fetchrow("SELECT * FROM battles WHERE id = $1", battle_id)
+        if not battle:
+            await callback.answer("❌ Battle not found.", show_alert=True)
+            return
+        await show_raid_status(callback.message, battle_id, {"name": battle['enemy_name'], "hp": battle['current_hp2'], "max_hp": battle['enemy_max_hp']})
+        await callback.answer("🔄 Refreshed!")
+
+# ------------------------------------------------------------
 # AWAKENING
 # ------------------------------------------------------------
 @dp.message(Command("awakening"))
@@ -2740,7 +2915,7 @@ async def commands_cmd(message: types.Message):
         f"/characters, /select [name]\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**Battle**\n"
-        f"/battle, /boss [name], /enemies, /pvp_challenge [user], /pvp_accept [id], /pvp_move [id], /raid\n"
+        f"/battle, /boss [name], /enemies, /pvp_challenge [user], /pvp_accept [id], /pvp_move [id], /raid, /raid_attack\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"**Shop & Inventory**\n"
         f"/shop, /buy [item], /bag, /use [item], /equip [weapon], /techniques, /learn [tech]\n"
@@ -3061,7 +3236,8 @@ async def diagnosis_cmd(message: types.Message):
         "removeyen", "addxp", "removexp", "setrank", "addlevel",
         "removelevel", "recalc", "diagnosis", "clearbattles",
         "event", "event_battle", "quests", "quest_accept", "quest_reward",
-        "materials", "craft", "leaderboard", "broadcast"
+        "materials", "craft", "leaderboard", "broadcast",
+        "raid", "raid_attack"
     ]
     report.append(f"• Total commands: {len(cmd_list)}")
     report.append(f"• List: `{', '.join(cmd_list)}`")
