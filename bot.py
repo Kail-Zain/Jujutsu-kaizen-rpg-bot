@@ -209,7 +209,7 @@ pvp_matches = {}
 user_sessions = {}
 
 # ------------------------------------------------------------
-# SESSION HELPERS
+# SESSION HELPERS – Prevents interference between users
 # ------------------------------------------------------------
 def set_session(user_id, session_type, **kwargs):
     user_sessions[user_id] = {"type": session_type, **kwargs}
@@ -231,7 +231,7 @@ def is_in_session(user_id, session_type=None, battle_id=None):
     return True
 
 # ------------------------------------------------------------
-# HELPERS
+# CORE HELPERS
 # ------------------------------------------------------------
 def calc_rank(level):
     if level >= 50: return "Special Grade"
@@ -640,7 +640,7 @@ async def stats_cmd(message: types.Message):
         await message.reply(caption)
 
 # ================================================================
-# ADMIN COMMANDS
+# ADMIN COMMANDS (only owner)
 # ================================================================
 @dp.message(Command("addyenall"))
 @friendly_error
@@ -688,6 +688,9 @@ async def removeyenall_cmd(message: types.Message):
         count = await conn.fetchval("SELECT COUNT(*) FROM players")
         await message.reply(f"✅ Removed ¥{amount:,} from all **{count}** players.")
 
+# ================================================================
+# RESTRICTION, VOW, SHIKIGAMI, PROFILE
+# ================================================================
 @dp.message(Command("restriction"))
 @friendly_error
 async def restriction_cmd(message: types.Message):
@@ -1603,7 +1606,7 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         await edit_battle_message(callback, caption, keyboard, media_url)
 
 # ================================================================
-# BATTLE TURN CALLBACK (PvE)
+# BATTLE TURN CALLBACK (PvE) – fully implemented
 # ================================================================
 @dp.callback_query(lambda c: c.data.startswith("bt|"))
 async def battle_turn_cb(callback: types.CallbackQuery):
@@ -2196,7 +2199,7 @@ async def pvp_accept(message: types.Message):
                 pass
 
 # ------------------------------------------------------------
-# PVP RENDER FUNCTION
+# PVP RENDER FUNCTION – builds the shared battle message
 # ------------------------------------------------------------
 def render_pvp_battle(battle_id):
     q = battle_queues.get(battle_id)
@@ -2233,6 +2236,7 @@ def render_pvp_battle(battle_id):
         f"Turn: {turn_indicator}"
     )
 
+    # Proper keyboard with inline_keyboard list – no row_width
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton("⚔️ Attack", callback_data=f"pvp_quick|{battle_id}|attack"),
