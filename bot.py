@@ -2,7 +2,7 @@
 #                 CURSED CHRONICLES – LEGENDARY EDITION
 #                 ALL FEATURES + SHARED PVP MENU + ANIME FLAVOR
 #                 FULL SESSION ISOLATION
-#                 COMPLETE – NO PLACEHOLDERS
+#                 FIXED: ALL BUTTONS USE KEYWORD ARGUMENTS
 # ================================================================
 
 import asyncio
@@ -209,7 +209,7 @@ pvp_matches = {}
 user_sessions = {}
 
 # ------------------------------------------------------------
-# SESSION HELPERS – Prevents interference between users
+# SESSION HELPERS
 # ------------------------------------------------------------
 def set_session(user_id, session_type, **kwargs):
     user_sessions[user_id] = {"type": session_type, **kwargs}
@@ -640,7 +640,7 @@ async def stats_cmd(message: types.Message):
         await message.reply(caption)
 
 # ================================================================
-# ADMIN COMMANDS (only owner)
+# ADMIN COMMANDS
 # ================================================================
 @dp.message(Command("addyenall"))
 @friendly_error
@@ -2236,17 +2236,16 @@ def render_pvp_battle(battle_id):
         f"Turn: {turn_indicator}"
     )
 
-    # Proper keyboard with inline_keyboard list – no row_width
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton("⚔️ Attack", callback_data=f"pvp_quick|{battle_id}|attack"),
-            InlineKeyboardButton("🛡️ Defend", callback_data=f"pvp_quick|{battle_id}|defend")
+            InlineKeyboardButton(text="⚔️ Attack", callback_data=f"pvp_quick|{battle_id}|attack"),
+            InlineKeyboardButton(text="🛡️ Defend", callback_data=f"pvp_quick|{battle_id}|defend")
         ],
         [
-            InlineKeyboardButton("🌀 Technique", callback_data=f"pvp_tech|{battle_id}"),
-            InlineKeyboardButton("🌐 Domain", callback_data=f"pvp_domain|{battle_id}")
+            InlineKeyboardButton(text="🌀 Technique", callback_data=f"pvp_tech|{battle_id}"),
+            InlineKeyboardButton(text="🌐 Domain", callback_data=f"pvp_domain|{battle_id}")
         ],
-        [InlineKeyboardButton("⏭️ Pass", callback_data=f"pvp_quick|{battle_id}|pass")]
+        [InlineKeyboardButton(text="⏭️ Pass", callback_data=f"pvp_quick|{battle_id}|pass")]
     ])
 
     return text, keyboard
@@ -2407,7 +2406,7 @@ async def pvp_tech_cb(callback: types.CallbackQuery):
                     text=f"🌀 {t} (DMG {tech['damage_multiplier']}x, CE {tech['ce_cost']})",
                     callback_data=f"pvp_quick_tech|{battle_id}|{t}"
                 )])
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back|{battle_id}")])
+        buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"pvp_back|{battle_id}")])
         markup = InlineKeyboardMarkup(inline_keyboard=buttons)
         await callback.message.edit_text("🌀 **Select a Technique:**", reply_markup=markup)
         await callback.answer()
@@ -2507,7 +2506,7 @@ async def pvp_domain_cb(callback: types.CallbackQuery):
                     text=f"🌐 {d} (DMG {dmg_mult}x, CE {ce_cost})",
                     callback_data=f"pvp_quick_domain|{battle_id}|{d}|{dmg_mult}|{ce_cost}"
                 )])
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back|{battle_id}")])
+        buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data=f"pvp_back|{battle_id}")])
         markup = InlineKeyboardMarkup(inline_keyboard=buttons)
         await callback.message.edit_text("🌐 **Select a Domain:**", reply_markup=markup)
         await callback.answer()
