@@ -220,6 +220,16 @@ def clear_session(user_id):
 def get_session(user_id):
     return user_sessions.get(user_id)
 
+def is_in_session(user_id, session_type=None, battle_id=None):
+    sess = get_session(user_id)
+    if not sess:
+        return False
+    if session_type and sess.get("type") != session_type:
+        return False
+    if battle_id and sess.get("battle_id") != battle_id:
+        return False
+    return True
+
 # ------------------------------------------------------------
 # HELPERS
 # ------------------------------------------------------------
@@ -678,9 +688,6 @@ async def removeyenall_cmd(message: types.Message):
         count = await conn.fetchval("SELECT COUNT(*) FROM players")
         await message.reply(f"✅ Removed ¥{amount:,} from all **{count}** players.")
 
-# ================================================================
-# RESTRICTION, VOW, SHIKIGAMI, PROFILE
-# ================================================================
 @dp.message(Command("restriction"))
 @friendly_error
 async def restriction_cmd(message: types.Message):
@@ -1596,7 +1603,7 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         await edit_battle_message(callback, caption, keyboard, media_url)
 
 # ================================================================
-# BATTLE TURN CALLBACK (PvE) – full implementation
+# BATTLE TURN CALLBACK (PvE)
 # ================================================================
 @dp.callback_query(lambda c: c.data.startswith("bt|"))
 async def battle_turn_cb(callback: types.CallbackQuery):
@@ -2152,7 +2159,6 @@ async def pvp_accept(message: types.Message):
             await message.reply("❌ This battle is not for you.")
             return
 
-        # Set sessions
         set_session(battle['player1_id'], "pvp", battle_id=battle_id)
         set_session(battle['player2_id'], "pvp", battle_id=battle_id)
 
@@ -2160,7 +2166,6 @@ async def pvp_accept(message: types.Message):
         ongoing_battles[battle['player1_id']] = battle_id
         ongoing_battles[battle['player2_id']] = battle_id
 
-        # Fetch full player data
         p1 = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player1_id'])
         p2 = await conn.fetchrow("SELECT * FROM players WHERE user_id = $1", battle['player2_id'])
 
@@ -2179,10 +2184,8 @@ async def pvp_accept(message: types.Message):
         first = random.choice([battle['player1_id'], battle['player2_id']])
         battle_queues[battle_id]['turn_player'] = first
 
-        # Send the shared battle menu
         await send_or_update_pvp_battle(battle_id, chat_id=message.chat.id)
 
-        # Notify players
         for pid in [battle['player1_id'], battle['player2_id']]:
             try:
                 if pid == first:
@@ -2230,14 +2233,17 @@ def render_pvp_battle(battle_id):
         f"Turn: {turn_indicator}"
     )
 
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        InlineKeyboardButton("⚔️ Attack", callback_data=f"pvp_quick|{battle_id}|attack"),
-        InlineKeyboardButton("🛡️ Defend", callback_data=f"pvp_quick|{battle_id}|defend"),
-        InlineKeyboardButton("🌀 Technique", callback_data=f"pvp_tech|{battle_id}"),
-        InlineKeyboardButton("🌐 Domain", callback_data=f"pvp_domain|{battle_id}"),
-        InlineKeyboardButton("⏭️ Pass", callback_data=f"pvp_quick|{battle_id}|pass")
-    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton("⚔️ Attack", callback_data=f"pvp_quick|{battle_id}|attack"),
+            InlineKeyboardButton("🛡️ Defend", callback_data=f"pvp_quick|{battle_id}|defend")
+        ],
+        [
+            InlineKeyboardButton("🌀 Technique", callback_data=f"pvp_tech|{battle_id}"),
+            InlineKeyboardButton("🌐 Domain", callback_data=f"pvp_domain|{battle_id}")
+        ],
+        [InlineKeyboardButton("⏭️ Pass", callback_data=f"pvp_quick|{battle_id}|pass")]
+    ])
 
     return text, keyboard
 
@@ -2601,7 +2607,7 @@ async def handle_pvp_victory(callback, battle_id, winner_id, loser_id):
         await callback.answer("🎉 Victory!")
 
 # ================================================================
-# STATUS & RESUME (with username priority)
+# STATUS & RESUME
 # ================================================================
 @dp.message(Command("status"))
 @friendly_error
@@ -2679,9 +2685,8 @@ async def resume_cmd(message: types.Message):
         await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)
 
 # ================================================================
-# PRESTIGE, MISSIONS, DAILY, CLAN, RAID, DUNGEON, TOWER, ACHIEVEMENTS, EVENTS, QUESTS, CRAFTING, LEADERBOARD
+# PRESTIGE
 # ================================================================
-
 @dp.message(Command("prestige"))
 @friendly_error
 async def prestige_cmd(message: types.Message):
@@ -2710,6 +2715,9 @@ async def prestige_cmd(message: types.Message):
         """, new_prestige, bonus_atk, bonus_hp, 100, 100, 10, 10, 10, user_id)
         await safe_send_media(message, 'animation', EFFECTS["awakening"], caption=f"🌟 **Prestige Complete!**\n━━━━━━━━━━━━━━━━━━━\nPrestige Level: {new_prestige}/10\nPermanent ATK Bonus: +{bonus_atk}\nPermanent HP Bonus: +{bonus_hp}\nLevel reset to 1. Good luck!")
 
+# ================================================================
+# MISSIONS & DAILY
+# ================================================================
 @dp.message(Command("missions"))
 @friendly_error
 async def missions_cmd(message: types.Message):
