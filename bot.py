@@ -1,6 +1,6 @@
 # ================================================================
 #                 CURSED CHRONICLES – COMPLETE BOT
-#                 ALL FEATURES – FINAL FIXES
+#                 ALL FEATURES – NO PLACEHOLDERS
 # ================================================================
 
 import asyncio
@@ -1987,7 +1987,7 @@ async def prestige_cmd(message: types.Message):
         await safe_send_media(message, 'animation', EFFECTS["awakening"], caption=f"🌟 **Prestige Complete!**\n━━━━━━━━━━━━━━━━━━━\nPrestige Level: {new_prestige}/10\nPermanent ATK Bonus: +{bonus_atk}\nPermanent HP Bonus: +{bonus_hp}\nLevel reset to 1. Good luck!")
 
 # ------------------------------------------------------------
-# PVP (full turn‑based)
+# PVP (full turn‑based) – with direct message error handling
 # ------------------------------------------------------------
 @dp.message(Command("pvp_challenge"))
 @friendly_error
@@ -2048,8 +2048,21 @@ async def pvp_accept(message: types.Message):
         }
         first = random.choice([battle['player1_id'], battle['player2_id']])
         battle_queues[battle_id]['turn_player'] = first
-        await message.reply(f"⚔️ **PVP BATTLE START!**\n<code>{first}</code> goes first.\nUse `/pvp_move` to select moves.")
-        await bot.send_message(first, f"⚔️ **Your turn!** Use `/pvp_move {battle_id}` to select moves.")
+
+        await message.reply(f"⚔️ **PVP BATTLE START!**\nPlayer {first} goes first.\nUse `/pvp_move {battle_id}` to select moves.")
+
+        # Try to notify the first player
+        try:
+            await bot.send_message(first, f"⚔️ **Your turn!** Use `/pvp_move {battle_id}` to select moves.")
+        except Exception:
+            await message.reply(f"ℹ️ Could not notify the other player directly. Please ask them to check the battle status with `/status`.")
+
+        # Also notify the other player
+        other_id = battle['player1_id'] if user_id == battle['player2_id'] else battle['player2_id']
+        try:
+            await bot.send_message(other_id, f"⚔️ **PVP BATTLE START!**\nYour opponent has accepted the challenge. Check `/status` or use `/pvp_move {battle_id}`.")
+        except Exception:
+            pass
 
 @dp.message(Command("pvp_move"))
 @friendly_error
@@ -2276,7 +2289,14 @@ async def pvp_end_turn(message, battle_id, user_id):
             await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_hp, battle_id)
         battle_queues[battle_id]['current_hp'] = new_hp
         battle_queues[battle_id]['turn_player'] = other_id
-        await bot.send_message(other_id, f"⚔️ **Your turn!** Use `/pvp_move {battle_id}` to select moves.")
+
+        # Try to notify the other player
+        try:
+            await bot.send_message(other_id, f"⚔️ **Your turn!** Use `/pvp_move {battle_id}` to select moves.")
+        except Exception:
+            # Notify the current player that they need to tell the opponent
+            await message.reply(f"ℹ️ Could not notify the other player. Please ask them to check `/status`.")
+
         await message.edit_text("Turn ended. Waiting for opponent.")
 
 # ------------------------------------------------------------
