@@ -1,6 +1,6 @@
 # ================================================================
 #                 CURSED CHRONICLES – COMPLETE BOT
-#                 ALL FEATURES – USER ISOLATION FIXED
+#                 ALL FEATURES – FINAL FIXES
 # ================================================================
 
 import asyncio
@@ -313,7 +313,7 @@ def friendly_error(func):
     return wrapper
 
 # ================================================================
-# FIXED /start – connection stays inside block
+# FIXED /start – sets default character and ensures ownership
 # ================================================================
 @dp.message(Command("start"))
 @friendly_error
@@ -329,16 +329,18 @@ async def start_cmd(message: types.Message):
             ON CONFLICT (user_id) DO UPDATE SET username = $2
         """, user_id, username, chat_id)
 
+        # Ensure Yuji is owned
         await conn.execute("""
             INSERT INTO player_characters (player_id, character_name)
             VALUES ($1, 'Yuji Itadori')
             ON CONFLICT DO NOTHING
         """, user_id)
 
-        player = await conn.fetchrow("SELECT domains FROM players WHERE user_id = $1", user_id)
-        if player and player['domains']:
-            unique = dedupe_domains(player['domains'])
-            await conn.execute("UPDATE players SET domains = $1 WHERE user_id = $2", unique, user_id)
+        # Set default character if not already set
+        await conn.execute("""
+            UPDATE players SET character_name = COALESCE(character_name, 'Yuji Itadori')
+            WHERE user_id = $1 AND character_name IS NULL
+        """, user_id)
 
         await conn.execute("UPDATE players SET last_ce_regen = NOW() WHERE user_id = $1 AND last_ce_regen IS NULL", user_id)
         await conn.execute("UPDATE players SET in_battle = FALSE WHERE user_id = $1", user_id)
@@ -3133,7 +3135,7 @@ async def recalc_cmd(message: types.Message):
             await message.reply(f"✅ Recalculated all {len(players)} players.")
 
 # ------------------------------------------------------------
-# REAL‑TIME DIAGNOSIS (enhanced)
+# REAL‑TIME DIAGNOSIS (enhanced, no markdown errors)
 # ------------------------------------------------------------
 @dp.message(Command("diagnosis"))
 @friendly_error
@@ -3143,23 +3145,23 @@ async def diagnosis_cmd(message: types.Message):
         return
 
     report = []
-    report.append("🔍 **CURSED CHRONICLES – SYSTEM DIAGNOSIS**")
-    report.append(f"🕒 Timestamp: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`")
+    report.append("🔍 CURSED CHRONICLES – SYSTEM DIAGNOSIS")
+    report.append(f"🕒 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     report.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    report.append("📊 *All data below is fetched in real‑time.*")
+    report.append("📊 All data below is fetched in real‑time.")
 
     # 1. Environment
-    report.append("\n🌐 **ENVIRONMENT**")
+    report.append("\n🌐 ENVIRONMENT")
     env_vars = ["BOT_TOKEN", "DATABASE_URL", "OWNER_ID"]
     for var in env_vars:
         if var == "OWNER_ID":
-            value = f"`{OWNER_ID}`" if OWNER_ID else "❌ Not set"
+            value = f"{OWNER_ID}" if OWNER_ID else "❌ Not set"
         else:
             value = "✅ Set" if os.getenv(var) else "❌ Missing"
         report.append(f"• {var}: {value}")
 
     # 2. Database
-    report.append("\n🗄️ **DATABASE**")
+    report.append("\n🗄️ DATABASE")
     try:
         async with db_pool.acquire() as conn:
             # Test connection
@@ -3186,9 +3188,9 @@ async def diagnosis_cmd(message: types.Message):
 
             for table, count in table_counts.items():
                 if isinstance(count, int):
-                    report.append(f"• Table `{table}`: ✅ {count} rows")
+                    report.append(f"• Table '{table}': ✅ {count} rows")
                 else:
-                    report.append(f"• Table `{table}`: ❌ {count}")
+                    report.append(f"• Table '{table}': ❌ {count}")
 
             total_players = await conn.fetchval("SELECT COUNT(*) FROM players")
             active_battles_db = await conn.fetchval("SELECT COUNT(*) FROM battles WHERE status = 'active'")
@@ -3199,10 +3201,10 @@ async def diagnosis_cmd(message: types.Message):
         report.append(f"❌ Database error: {e}")
 
     # 3. Global state
-    report.append("\n🧠 **GLOBAL STATE (IN‑MEMORY)**")
-    report.append(f"• `ongoing_battles`: {len(ongoing_battles)} entries")
-    report.append(f"• `battle_queues`: {len(battle_queues)} entries")
-    report.append(f"• `pvp_matches`: {len(pvp_matches)} entries")
+    report.append("\n🧠 GLOBAL STATE (IN‑MEMORY)")
+    report.append(f"• ongoing_battles: {len(ongoing_battles)} entries")
+    report.append(f"• battle_queues: {len(battle_queues)} entries")
+    report.append(f"• pvp_matches: {len(pvp_matches)} entries")
 
     orphaned = []
     for user_id, b_id in ongoing_battles.items():
@@ -3222,7 +3224,7 @@ async def diagnosis_cmd(message: types.Message):
     else:
         report.append("✅ No stale queues.")
 
-    report.append("\n📊 **BATTLE QUEUES SNAPSHOT**")
+    report.append("\n📊 BATTLE QUEUES SNAPSHOT")
     if battle_queues:
         for idx, (b_id, data) in enumerate(list(battle_queues.items())[:5]):
             participants = list(data.get('participants', {}).keys())
@@ -3234,14 +3236,14 @@ async def diagnosis_cmd(message: types.Message):
     else:
         report.append("• No active battles.")
 
-    report.append("\n⚔️ **PVP MATCHES**")
+    report.append("\n⚔️ PVP MATCHES")
     if pvp_matches:
         for b_id, meta in pvp_matches.items():
             report.append(f"• Battle {b_id}: Challenger={meta['challenger']}, Target={meta['target']}, Turn={meta.get('turn', 1)}")
     else:
         report.append("• No PvP matches.")
 
-    report.append("\n📋 **COMMANDS REGISTERED**")
+    report.append("\n📋 COMMANDS REGISTERED")
     cmd_list = [
         "start", "guide", "stats", "addyenall", "removeyenall",
         "restriction", "vow", "shikigami", "profile", "characters",
@@ -3258,12 +3260,12 @@ async def diagnosis_cmd(message: types.Message):
         "raid", "raid_attack"
     ]
     report.append(f"• Total commands: {len(cmd_list)}")
-    report.append(f"• List: `{', '.join(cmd_list)}`")
+    report.append(f"• List: {', '.join(cmd_list)}")
 
-    report.append("\n🛠️ **RECOMMENDATIONS**")
+    report.append("\n🛠️ RECOMMENDATIONS")
     issues = []
     if orphaned or stale:
-        issues.append("• Clear orphaned/stale battles using `/clearbattles`.")
+        issues.append("• Clear orphaned/stale battles using /clearbattles.")
     if not battle_queues and active_battles_db > 0:
         issues.append("• Database shows active battles but none in memory – restart may fix.")
     if not issues:
@@ -3278,7 +3280,7 @@ async def diagnosis_cmd(message: types.Message):
             caption="📄 Full diagnosis report (too long for inline)."
         )
     else:
-        await message.reply(final_report, parse_mode="Markdown")
+        await message.reply(final_report)  # no markdown to avoid parse errors
 
 # ------------------------------------------------------------
 # CLEARBATTLES
