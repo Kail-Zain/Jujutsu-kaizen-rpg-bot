@@ -1391,7 +1391,7 @@ async def story_chapter_cmd(message: types.Message):
         await boss_cmd(message, chapter['boss_name'], is_story=True, chapter_id=chapter['id'])
 
 # ================================================================
-# FIXED `boss_cmd` – now allows story enemies (non‑boss)
+# FIXED boss_cmd – allows story enemies (non‑boss)
 # ================================================================
 async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool = False, chapter_id: int = None):
     if boss_name is None:
