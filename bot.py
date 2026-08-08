@@ -2,7 +2,7 @@
 #                 CURSED CHRONICLES – LEGENDARY EDITION
 #                 ALL FEATURES + SHARED PVP MENU + ANIME FLAVOR
 #                 FULL SESSION ISOLATION
-#                 FIXED: ALL BUTTONS USE KEYWORD ARGUMENTS
+#                 FIXED: ERROR HANDLER – NO MARKDOWN PARSE
 # ================================================================
 
 import asyncio
@@ -462,7 +462,7 @@ async def on_shutdown():
     print("✅ Database closed!")
 
 # ------------------------------------------------------------
-# IMPROVED ERROR HANDLER
+# IMPROVED ERROR HANDLER – NO MARKDOWN, SAFE
 # ------------------------------------------------------------
 def friendly_error(func):
     async def wrapper(message: types.Message, *args, **kwargs):
@@ -474,17 +474,19 @@ def friendly_error(func):
                     sess = get_session(message.from_user.id)
                     if sess:
                         if cmd in ['/battle', '/boss', '/pvp_challenge', '/dungeon', '/tower', '/raid']:
-                            await message.reply("⚠️ You're already in a session! Finish or use `/status` to resume.")
+                            await message.reply("⚠️ You're already in a session! Finish or use /status to resume.")
                             return
             return await func(message)
         except Exception as e:
             logging.error(f"Error in {func.__name__}: {traceback.format_exc()}")
-            await message.reply(
-                f"❌ **Oops! Something went wrong.**\n\n"
+            # Plain text error message – no Markdown to avoid parse errors
+            error_text = (
+                f"❌ Oops! Something went wrong.\n\n"
                 f"Please try again later. If the problem persists, contact the owner.\n"
-                f"*Error details:* `{str(e)[:150]}`\n\n"
-                f"*{get_jjk_quote()}*"
+                f"Error details: {str(e)[:150]}\n\n"
+                f"{get_jjk_quote()}"
             )
+            await message.reply(error_text)
     return wrapper
 
 # ================================================================
