@@ -389,7 +389,6 @@ async def update_player_stats(user_id):
         """, new_level, new_max_hp, new_max_ce, new_atk, new_def, new_spd, new_hp, new_ce, user_id)
 
 async def apply_passive_regen(player):
-    """Apply passive HP regen if curse_regen is True."""
     if not player.get('curse_regen'):
         return player
     now = datetime.now()
@@ -502,7 +501,6 @@ async def update_quests(user_id, action_type, amount=1):
 
 # ---------- BINDING VOWS ----------
 async def apply_vows_to_player(user_id, player_stats):
-    """Apply active vow effects and decrement turns."""
     async with db_pool.acquire() as conn:
         active_vows = await conn.fetch("""
             SELECT v.*, pv.remaining_turns 
@@ -572,8 +570,8 @@ async def safe_send_media(message, media_type, media_url, caption=None, reply_ma
             await message.reply_animation(animation=media_url, caption=caption, reply_markup=reply_markup)
         else:
             await message.reply(caption or "ℹ️ Media unavailable.", reply_markup=reply_markup)
-    except Exception as e:
-        logging.warning(f"Media send failed: {e}")
+    except Exception as exc:
+        logging.warning(f"Media send failed: {exc}")
         try:
             await message.reply_photo(photo=placeholder, caption=caption or "⚠️ Media unavailable.", reply_markup=reply_markup)
         except:
@@ -590,11 +588,11 @@ async def edit_battle_message(callback: types.CallbackQuery, caption: str, reply
                 await callback.message.edit_media(media=media, reply_markup=reply_markup)
         else:
             await callback.message.edit_text(caption, reply_markup=reply_markup, parse_mode="HTML")
-    except Exception as e:
-        if "message is not modified" in str(e):
+    except Exception as exc:
+        if "message is not modified" in str(exc):
             pass
         else:
-            logging.error(f"Edit battle message error: {e}")
+            logging.error(f"Edit battle message error: {exc}")
 
 # ---------- STARTUP / SHUTDOWN ----------
 async def on_startup():
@@ -625,12 +623,12 @@ def friendly_error(func):
                             await message.reply("⚠️ You're already in a session! Finish or use /status to resume.")
                             return
             return await func(message)
-        except Exception as e:
+        except Exception as exc:
             logging.error(f"Error in {func.__name__}: {traceback.format_exc()}")
             error_text = (
                 f"❌ Oops! Something went wrong.\n\n"
                 f"Please try again later. If the problem persists, contact the owner.\n"
-                f"Error details: {str(e)[:150]}\n\n"
+                f"Error details: {str(exc)[:150]}\n\n"
                 f"{get_jjk_quote()}"
             )
             await message.reply(error_text)
@@ -1079,9 +1077,9 @@ async def send_char_page(message_or_callback, page):
                     )
                 else:
                     await callback.message.edit_text(caption, reply_markup=keyboard, parse_mode="HTML")
-    except Exception as e:
+    except Exception as exc:
         if isinstance(message_or_callback, types.Message):
-            await message_or_callback.reply(f"❌ An error occurred: {str(e)[:150]}")
+            await message_or_callback.reply(f"❌ An error occurred: {str(exc)[:150]}")
         else:
             await message_or_callback.answer("❌ An error occurred.", show_alert=True)
 
@@ -1130,8 +1128,8 @@ async def char_buy_cb(callback: types.CallbackQuery):
                                    user_id, char['name'])
                 await callback.answer(f"✅ Got {char['name']} for free!")
             await send_char_page(callback, 0)
-    except Exception as e:
-        await callback.answer(f"❌ Error: {str(e)[:100]}", show_alert=True)
+    except Exception as exc:
+        await callback.answer(f"❌ Error: {str(exc)[:100]}", show_alert=True)
 
 @dp.callback_query(lambda c: c.data.startswith("char_select_"))
 async def char_select_cb(callback: types.CallbackQuery):
@@ -1172,8 +1170,8 @@ async def char_select_cb(callback: types.CallbackQuery):
                 )
             else:
                 await callback.message.edit_text(caption, reply_markup=None, parse_mode="HTML")
-    except Exception as e:
-        await callback.answer(f"❌ Error: {str(e)[:100]}", show_alert=True)
+    except Exception as exc:
+        await callback.answer(f"❌ Error: {str(exc)[:100]}", show_alert=True)
 
 @dp.callback_query(lambda c: c.data == "char_page_noop")
 async def char_page_noop(callback: types.CallbackQuery):
@@ -1257,9 +1255,9 @@ async def send_shop_page(message_or_callback, page):
             else:
                 callback = message_or_callback
                 await callback.message.edit_text(response, reply_markup=keyboard, parse_mode="HTML")
-    except Exception as e:
+    except Exception as exc:
         if isinstance(message_or_callback, types.Message):
-            await message_or_callback.reply(f"❌ An error occurred: {str(e)[:150]}")
+            await message_or_callback.reply(f"❌ An error occurred: {str(exc)[:150]}")
         else:
             await message_or_callback.answer("❌ An error occurred.", show_alert=True)
 
@@ -1573,7 +1571,6 @@ async def story_chapter_cmd(message: types.Message):
                     await message.reply(f"❌ You must complete Chapter {chapter_num - 1} first.")
                     return
         await safe_send_media(message, 'animation', EFFECTS["story_boss"], caption=f"⚔️ <b>Story Chapter {chapter_num}: {e(chapter['title'])}</b>\nBoss: {e(chapter['boss_name'])}\nDefeat it to claim your rewards!")
-        # Launch boss battle (story mode)
         await boss_cmd(message, chapter['boss_name'], is_story=True, chapter_id=chapter['id'])
 
 # ================================================================
@@ -1627,7 +1624,6 @@ async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool
                 "current_hp": enemy['hp'],
                 "log": []
             }
-            # Apply binding vows
             active_vows = await conn.fetch("""
                 SELECT v.*, pv.remaining_turns 
                 FROM player_vows pv 
@@ -1637,8 +1633,8 @@ async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool
             vow_effects = [v['effect'] for v in active_vows]
             await conn.execute("UPDATE battles SET vow_effects = $1 WHERE id = $2", json.dumps(vow_effects), battle_id)
             await show_battle_turn(message, battle_id, player, enemy, vow_effects)
-    except Exception as e:
-        await message.reply(f"❌ Error starting boss: {str(e)[:150]}")
+    except Exception as exc:
+        await message.reply(f"❌ Error starting boss: {str(exc)[:150]}")
 
 @dp.message(Command("boss"))
 async def boss_cmd_handler(message: types.Message):
@@ -1693,8 +1689,8 @@ async def battle_cmd(message: types.Message):
             vow_effects = [v['effect'] for v in active_vows]
             await conn.execute("UPDATE battles SET vow_effects = $1 WHERE id = $2", json.dumps(vow_effects), battle_id)
             await show_battle_turn(message, battle_id, player, enemy, vow_effects)
-    except Exception as e:
-        await message.reply(f"❌ Error starting battle: {str(e)[:150]}")
+    except Exception as exc:
+        await message.reply(f"❌ Error starting battle: {str(exc)[:150]}")
 
 async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_effects=[], log_lines=None):
     cp = get_combo_points(player['level'])
@@ -1717,7 +1713,6 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         [InlineKeyboardButton(text="🌀 Technique", callback_data=f"bt|tech|{battle_id}")],
         [InlineKeyboardButton(text="🌐 Domain", callback_data=f"bt|domain|{battle_id}")],
     ]
-    # Shikigami button for Megumi
     if player.get('character_name') == 'Megumi Fushiguro':
         keyboard_buttons.append([InlineKeyboardButton(text="🌀 Shikigami", callback_data=f"bt|shikigami|{battle_id}")])
     keyboard_buttons.append([
@@ -1827,7 +1822,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 return
             player = dict(player_record)
 
-            # Apply binding vows to player stats for this turn
+            # Apply binding vows
             player = await apply_vows_to_player(user_id, player)
 
             if battle.get('is_pvp'):
@@ -1911,7 +1906,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 if player['ce'] < total_ce:
                     await callback.answer(f"❌ Not enough CE! Need {total_ce}, have {player['ce']}", show_alert=True)
                     return
-                # fetch shikigami details for later execution
                 shikigami = await conn.fetchrow("SELECT * FROM shikigami WHERE id = $1", shikigami_id)
                 if not shikigami:
                     await callback.answer("❌ Shikigami not found.", show_alert=True)
@@ -2084,7 +2078,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     mtype = move['type']
                     if mtype == 'attack':
                         dmg = max(1, int(player['atk'] * random.uniform(0.8, 1.2)))
-                        # Black Flash chance
                         if random.random() < 0.01:
                             dmg = int(dmg * 2.5)
                             black_flash_triggered = True
@@ -2132,9 +2125,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         shikigami_id = move.get('shikigami_id')
                         shikigami = await conn.fetchrow("SELECT * FROM shikigami WHERE id = $1", shikigami_id)
                         if shikigami:
-                            # Apply shikigami effect
-                            effect = shikigami['effect']
-                            dmg = 0
                             if "Divine Dogs" in shikigami['name']:
                                 atk_bonus = int(player['atk'] * 0.2)
                                 dmg = max(1, int((player['atk'] + atk_bonus) * random.uniform(0.8, 1.2)))
@@ -2152,7 +2142,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                             total_damage += dmg
                             await safe_send_media(callback.message, 'animation', EFFECTS["shikigami_summon"], caption=f"🌀 {shikigami['name']} summoned!")
 
-                # Apply damage to enemy/opponent
+                # Apply damage
                 if battle.get('is_pvp'):
                     other_id = battle['player1_id'] if user_id == battle['player2_id'] else battle['player2_id']
                     if user_id == battle['player1_id']:
@@ -2167,7 +2157,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     await conn.execute("UPDATE battles SET current_hp2 = $1 WHERE id = $2", new_enemy_hp, battle_id)
                     battle_queues[battle_id]['current_hp'] = new_enemy_hp
 
-                # Enemy counter-attack (unless stunned)
+                # Enemy counter-attack
                 enemy_dmg = 0
                 if battle_queues.get(battle_id, {}).get('stun'):
                     exec_log.append("🌀 Enemy is stunned! No counter-attack.")
@@ -2200,7 +2190,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         await conn.execute("UPDATE players SET losses = losses + 1 WHERE user_id = $1", loser_id)
                         await update_player_stats(winner_id)
                         await update_player_stats(loser_id)
-                        # Check achievements/missions/quests
                         await check_achievements(winner_id)
                         await update_missions(winner_id, "wins", 1)
                         await update_quests(winner_id, "wins", 1)
@@ -2363,8 +2352,8 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     await show_battle_turn(callback, battle_id, player, enemy, vow_effects)
                     await callback.answer("❌ Failed to escape! Enemy attacked.")
 
-    except Exception as e:
-        await callback.answer(f"❌ Error: {str(e)[:100]}", show_alert=True)
+    except Exception as exc:
+        await callback.answer(f"❌ Error: {str(exc)[:100]}", show_alert=True)
 
 # ================================================================
 # PVP COMMANDS (full implementation)
@@ -2528,8 +2517,8 @@ async def send_or_update_pvp_battle(battle_id, chat_id=None, callback=None):
     if callback:
         try:
             await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            logging.error(f"Failed to edit PvP message: {e}")
+        except Exception as exc:
+            logging.error(f"Failed to edit PvP message: {exc}")
             new_msg = await callback.message.reply(text, reply_markup=keyboard, parse_mode="HTML")
             q['message_id'] = new_msg.message_id
             q['chat_id'] = new_msg.chat.id
@@ -2541,8 +2530,8 @@ async def send_or_update_pvp_battle(battle_id, chat_id=None, callback=None):
         if q.get('message_id') and q.get('chat_id'):
             try:
                 await bot.edit_message_text(text, chat_id=q['chat_id'], message_id=q['message_id'], reply_markup=keyboard, parse_mode="HTML")
-            except Exception as e:
-                logging.error(f"Failed to edit PvP message: {e}")
+            except Exception as exc:
+                logging.error(f"Failed to edit PvP message: {exc}")
                 sent = await bot.send_message(q['chat_id'], text, reply_markup=keyboard, parse_mode="HTML")
                 q['message_id'] = sent.message_id
         else:
@@ -2945,10 +2934,8 @@ async def resume_cmd(message: types.Message):
         await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)
 
 # ================================================================
-# OTHER COMMANDS (Prestige, Missions, Daily, Clan, Raid, Dungeon, Tower, Achievements, Events, Quests, Materials, Craft, Leaderboard, NPC, Awakening, Admin, etc.)
+# PRESTIGE, MISSIONS, DAILY, CLAN, RAID, DUNGEON, TOWER, ACHIEVEMENTS, EVENTS, QUESTS, MATERIALS, CRAFT, LEADERBOARD, NPC, AWAKENING
 # ================================================================
-# Due to length, I'll keep these compact but fully functional.
-# They are all present in the previous version and work as intended.
 
 @dp.message(Command("prestige"))
 @friendly_error
@@ -3053,7 +3040,6 @@ async def daily_cmd(message: types.Message):
 @dp.message(Command("clan"))
 @friendly_error
 async def clan_cmd(message: types.Message):
-    # (full implementation as in previous version)
     args = message.text.split()
     if len(args) < 2:
         await message.reply("📝 Usage:\n/clan create [name]\n/clan join [name]\n/clan info\n/clan leave\n/clan upgrade\n/clan war [clan]")
@@ -3341,6 +3327,7 @@ async def raid_refresh_cb(callback: types.CallbackQuery):
 # ================================================================
 # DUNGEON, TOWER, ACHIEVEMENTS, EVENTS, QUESTS, MATERIALS, CRAFT, LEADERBOARD, NPC, AWAKENING
 # ================================================================
+
 @dp.message(Command("dungeon"))
 @friendly_error
 async def dungeon_cmd(message: types.Message):
@@ -3477,13 +3464,13 @@ async def event_cmd(message: types.Message):
             await message.reply("🎯 No active events right now.")
             return
         resp = "🎯 <b>Active Events</b>\n━━━━━━━━━━━━━━━━━━━\n"
-        for e in events:
-            resp += f"🔥 {e['event_type'].title()}: <b>{e(e['boss_name'])}</b>\n"
-            resp += f"⏳ Ends: {e['end_time'].strftime('%Y-%m-%d %H:%M')}\n"
-            if e.get('reward_pool'):
-                rewards = json.loads(e['reward_pool'])
+        for ev in events:   # renamed from 'e' to 'ev'
+            resp += f"🔥 {ev['event_type'].title()}: <b>{e(ev['boss_name'])}</b>\n"
+            resp += f"⏳ Ends: {ev['end_time'].strftime('%Y-%m-%d %H:%M')}\n"
+            if ev.get('reward_pool'):
+                rewards = json.loads(ev['reward_pool'])
                 resp += f"🎁 Rewards: {', '.join([f'{k}: {v}' for k, v in rewards.items()])}\n"
-            resp += f"Use /event_battle {e['id']} to fight!\n\n"
+            resp += f"Use /event_battle {ev['id']} to fight!\n\n"
         await message.reply(resp, parse_mode="HTML")
 
 @dp.message(Command("event_battle"))
@@ -3546,11 +3533,300 @@ async def event_battle_cmd(message: types.Message):
         await conn.execute("UPDATE battles SET vow_effects = $1 WHERE id = $2", json.dumps(vow_effects), battle_id)
         await show_battle_turn(message, battle_id, player, enemy, vow_effects)
 
-# Quests, Materials, Craft, Leaderboard, NPC, Awakening, Admin commands are identical to previous version – they work.
+@dp.message(Command("quests"))
+@friendly_error
+async def quests_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        quests = await conn.fetch("SELECT * FROM quests WHERE type = 'side' OR (type = 'story' AND chapter_id IS NOT NULL)")
+        if not quests:
+            await message.reply("❌ No quests available.")
+            return
+        player_quests = await conn.fetch("SELECT quest_id, progress, completed FROM player_quests WHERE player_id = $1", user_id)
+        resp = "📜 <b>Quests</b>\n━━━━━━━━━━━━━━━━━━━\n"
+        for q in quests:
+            pq = next((p for p in player_quests if p['quest_id'] == q['id']), None)
+            status = "✅" if pq and pq['completed'] else "⏳" if pq else "🔒"
+            progress = f" ({pq['progress']}/{q['requirement'].split(':')[1]})" if pq and not pq['completed'] else ""
+            resp += f"{status} <b>{e(q['title'])}</b> – {e(q['description'])}{progress}\n"
+            resp += f"   Reward: ¥{q['reward_yen']}, XP {q['reward_xp']}\n"
+        resp += "\nAccept: /quest_accept [id]"
+        await message.reply(resp, parse_mode="HTML")
+
+@dp.message(Command("quest_accept"))
+@friendly_error
+async def quest_accept(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("📝 Usage: /quest_accept [quest_id]")
+        return
+    quest_id = int(args[1])
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        quest = await conn.fetchrow("SELECT * FROM quests WHERE id = $1", quest_id)
+        if not quest:
+            await message.reply("❌ Quest not found.")
+            return
+        existing = await conn.fetchrow("SELECT * FROM player_quests WHERE player_id = $1 AND quest_id = $2", user_id, quest_id)
+        if existing:
+            await message.reply("❌ You already have this quest.")
+            return
+        await conn.execute("INSERT INTO player_quests (player_id, quest_id, progress) VALUES ($1, $2, 0)", user_id, quest_id)
+        await message.reply(f"✅ Quest accepted: <b>{e(quest['title'])}</b>", parse_mode="HTML")
+
+@dp.message(Command("quest_reward"))
+@friendly_error
+async def quest_reward(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("📝 Usage: /quest_reward [quest_id]")
+        return
+    quest_id = int(args[1])
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        pq = await conn.fetchrow("SELECT * FROM player_quests WHERE player_id = $1 AND quest_id = $2 AND completed = TRUE", user_id, quest_id)
+        if not pq:
+            await message.reply("❌ Quest not completed or not found.")
+            return
+        quest = await conn.fetchrow("SELECT * FROM quests WHERE id = $1", quest_id)
+        if not quest:
+            await message.reply("❌ Quest not found.")
+            return
+        await conn.execute("UPDATE players SET yen = LEAST(yen + $1, $2), xp = xp + $3 WHERE user_id = $4",
+                           quest['reward_yen'], MAX_YEN, quest['reward_xp'], user_id)
+        if quest.get('reward_item'):
+            await conn.execute("UPDATE players SET bag = array_append(bag, $1) WHERE user_id = $2",
+                               quest['reward_item'], user_id)
+        await conn.execute("DELETE FROM player_quests WHERE player_id = $1 AND quest_id = $2", user_id, quest_id)
+        await update_player_stats(user_id)
+        await message.reply(f"✅ Rewards claimed for <b>{e(quest['title'])}</b>! +¥{quest['reward_yen']}, +{quest['reward_xp']} XP.", parse_mode="HTML")
+
+@dp.message(Command("materials"))
+@friendly_error
+async def materials_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        materials = await conn.fetch("SELECT m.*, pm.quantity FROM materials m LEFT JOIN player_materials pm ON m.id = pm.material_id AND pm.player_id = $1", user_id)
+        if not materials:
+            await message.reply("❌ You have no materials. Defeat bosses to earn them.")
+            return
+        resp = "📦 <b>Your Materials</b>\n━━━━━━━━━━━━━━━━━━━\n"
+        for m in materials:
+            qty = m['quantity'] or 0
+            resp += f"• {e(m['name'])} x{qty} ({e(m['rarity'])})\n"
+        await message.reply(resp, parse_mode="HTML")
+
+@dp.message(Command("craft"))
+@friendly_error
+async def craft_cmd(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("📝 Usage: /craft list | /craft [recipe name]")
+        return
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        if args[1].lower() == 'list':
+            recipes = await conn.fetch("SELECT * FROM recipes")
+            if not recipes:
+                await message.reply("❌ No recipes available.")
+                return
+            resp = "🔨 <b>Crafting Recipes</b>\n━━━━━━━━━━━━━━━━━━━\n"
+            for r in recipes:
+                resp += f"• <b>{e(r['name'])}</b> – {e(r['description'])}\n"
+                resp += f"  Result: {e(r['result_item'])}\n"
+                resp += f"  Cost: ¥{r['cost_yen']}\n"
+                ingredients = json.loads(r['ingredients'])
+                for mid, qty in ingredients.items():
+                    mat = await conn.fetchrow("SELECT name FROM materials WHERE id = $1", int(mid))
+                    mat_name = mat['name'] if mat else f"Material {mid}"
+                    resp += f"    - {e(mat_name)} x{qty}\n"
+            await message.reply(resp, parse_mode="HTML")
+            return
+        name = " ".join(args[1:])
+        recipe = await conn.fetchrow("SELECT * FROM recipes WHERE name ILIKE $1", name)
+        if not recipe:
+            await message.reply("❌ Recipe not found.")
+            return
+        ingredients = json.loads(recipe['ingredients'])
+        player = await conn.fetchrow("SELECT yen FROM players WHERE user_id = $1", user_id)
+        if player['yen'] < recipe['cost_yen']:
+            await message.reply(f"❌ Not enough Yen! Need ¥{recipe['cost_yen']}, have ¥{player['yen']}.")
+            return
+        for mid, qty in ingredients.items():
+            player_mat = await conn.fetchrow("SELECT quantity FROM player_materials WHERE player_id = $1 AND material_id = $2", user_id, int(mid))
+            if not player_mat or player_mat['quantity'] < qty:
+                mat = await conn.fetchrow("SELECT name FROM materials WHERE id = $1", int(mid))
+                mat_name = mat['name'] if mat else f"Material {mid}"
+                await message.reply(f"❌ Not enough {mat_name}. Need {qty}.")
+                return
+        await conn.execute("UPDATE players SET yen = yen - $1 WHERE user_id = $2", recipe['cost_yen'], user_id)
+        for mid, qty in ingredients.items():
+            await conn.execute("UPDATE player_materials SET quantity = quantity - $1 WHERE player_id = $2 AND material_id = $3",
+                               qty, user_id, int(mid))
+        await conn.execute("UPDATE players SET bag = array_append(bag, $1) WHERE user_id = $2", recipe['result_item'], user_id)
+        await message.reply(f"✅ Crafted <b>{e(recipe['result_item'])}</b>! Check /bag.", parse_mode="HTML")
+
+@dp.message(Command("leaderboard"))
+@friendly_error
+async def leaderboard_cmd(message: types.Message):
+    args = message.text.split()
+    category = args[1].lower() if len(args) > 1 else 'level'
+    async with db_pool.acquire() as conn:
+        if category == 'level':
+            rows = await conn.fetch("SELECT username, level FROM players ORDER BY level DESC LIMIT 10")
+            label = "Level"
+        elif category == 'wins':
+            rows = await conn.fetch("SELECT username, wins FROM players ORDER BY wins DESC LIMIT 10")
+            label = "Wins"
+        elif category == 'boss_kills':
+            rows = await conn.fetch("SELECT username, boss_kills FROM players ORDER BY boss_kills DESC LIMIT 10")
+            label = "Boss Kills"
+        elif category == 'prestige':
+            rows = await conn.fetch("SELECT username, prestige_level FROM players ORDER BY prestige_level DESC LIMIT 10")
+            label = "Prestige"
+        elif category == 'yen':
+            rows = await conn.fetch("SELECT username, yen FROM players ORDER BY yen DESC LIMIT 10")
+            label = "Yen"
+        else:
+            await message.reply("❌ Invalid category. Options: level, wins, boss_kills, prestige, yen")
+            return
+        if not rows:
+            await message.reply("❌ No players found.")
+            return
+        resp = f"🏆 <b>Leaderboard – {category.title()}</b>\n━━━━━━━━━━━━━━━━━━━\n"
+        for i, row in enumerate(rows, 1):
+            val = row[category]
+            resp += f"{i}. {e(row['username'])} – {val} {label}\n"
+        await message.reply(resp, parse_mode="HTML")
+
+@dp.message(Command("npc"))
+@friendly_error
+async def npc_cmd(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("📝 Usage:\n/npc list\n/npc talk [name]")
+        return
+    action = args[1].lower()
+    async with db_pool.acquire() as conn:
+        if action == "list":
+            npcs = await conn.fetch("SELECT * FROM npcs")
+            if not npcs:
+                await message.reply("❌ No NPCs available.")
+                return
+            resp = "🧙 <b>Available NPCs</b>\n━━━━━━━━━━━━━━━━━━━\n"
+            for n in npcs:
+                resp += f"• <b>{e(n['name'])}</b> – {e(n['role'])}\n"
+            resp += "\nUse /npc talk [name] to interact."
+            await message.reply(resp, parse_mode="HTML")
+        elif action == "talk":
+            if len(args) < 3:
+                await message.reply("📝 Usage: /npc talk [name]")
+                return
+            name = " ".join(args[2:])
+            npc = await conn.fetchrow("SELECT * FROM npcs WHERE name ILIKE $1", name)
+            if not npc:
+                await message.reply(f"❌ NPC '{name}' not found.")
+                return
+            responses = {
+                "Gojo Satoru": "Hey there, weakling. Want to train? It'll cost you 50 CE.",
+                "Nanami Kento": "I have some overtime quests if you're interested.",
+                "Mei Mei": "Everything has a price, darling. Even my advice.",
+                "Utahime Iori": "I can perform a ritual to heal you. Focus.",
+                "Shoko Ieiri": "Medic here. I can patch you up. At a price.",
+                "Tengen": "The barriers of this world are thin. Seek the truth.",
+            }
+            reply = responses.get(npc['name'], f"{npc['name']}: {npc['description']}")
+            await message.reply(f"🧙 <b>{e(npc['name'])}</b> says:\n{e(reply)}", parse_mode="HTML")
+
+@dp.message(Command("awakening"))
+@friendly_error
+async def awakening_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        player = await conn.fetchrow("SELECT awakening, awakening_level, awakening_aura FROM players WHERE user_id = $1", user_id)
+        if not player:
+            await message.reply("❌ Start with /start first!")
+            return
+        if player['awakening']:
+            await message.reply(
+                f"🌀 <b>Awakening: {e(player['awakening'])}</b>\n"
+                f"Level: {player['awakening_level']}\n"
+                f"Aura: {'✅ Active' if player['awakening_aura'] else '❌ Inactive'}\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"Keep fighting to evolve your awakening!",
+                parse_mode="HTML"
+            )
+        else:
+            await message.reply(
+                "🌀 <b>No Awakening Yet</b>\n"
+                "Awakenings can be triggered by:\n"
+                "• Defeating a boss (10% chance)\n"
+                "• Dropping below 10% HP in battle (5% chance)\n"
+                "• Random luck (1% chance)",
+                parse_mode="HTML"
+            )
+
+async def send_owner_info(message: types.Message):
+    await message.reply(
+        f"👑 <b>Owner & Developer</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"Name: {e(OWNER_NAME)}\n"
+        f"ID: {OWNER_ID}\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"{YEN_PURCHASE_INFO}",
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("buyyen"))
+async def buyyen_cmd(message: types.Message):
+    await send_owner_info(message)
+
+@dp.message(Command("commands"))
+@friendly_error
+async def commands_cmd(message: types.Message):
+    await message.reply(
+        "📋 <b>Cursed Chronicles — Command List</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>General</b>\n"
+        "/start, /profile, /guide, /status, /resume [id], /commands, /buyyen, /stats\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Characters</b>\n"
+        "/characters, /select [name]\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Battle</b>\n"
+        "/battle, /boss [name], /enemies, /pvp_challenge [user], /pvp_accept [id], /raid, /raid_attack\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Shop & Inventory</b>\n"
+        "/shop, /buy [item], /bag, /use [item], /equip [weapon], /techniques, /learn [tech]\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Clans</b>\n"
+        "/clan create [name], /clan join [name], /clan info, /clan leave, /clan upgrade, /clan war [clan]\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Advanced</b>\n"
+        "/awakening, /npc list, /npc talk [name], /shikigami, /restriction, /vow\n"
+        "/story, /story_chapter [num], /dungeon, /tower, /achievements\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Quests & Events</b>\n"
+        "/quests, /quest_accept [id], /quest_reward [id], /event, /event_battle [id]\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Crafting</b>\n"
+        "/materials, /craft list, /craft [recipe]\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Leaderboard</b>\n"
+        "/leaderboard [category] – level, wins, boss_kills, prestige, yen\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Admin</b> (owner only)\n"
+        "/addadmin [user], /removeadmin [user], /broadcast [message]\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "<b>Owner</b> (full access)\n"
+        "/addyen, /removeyen, /addyenall, /removeyenall, /addxp, /removexp, /setrank, /addlevel, /removelevel, /recalc, /diagnosis, /clearbattles",
+        parse_mode="HTML"
+    )
 
 # ================================================================
 # ADMIN & OWNER COMMANDS
 # ================================================================
+
 @dp.message(Command("addadmin"))
 @friendly_error
 async def add_admin_cmd(message: types.Message):
@@ -3817,15 +4093,15 @@ async def diagnosis_cmd(message: types.Message):
                 try:
                     count = await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
                     report.append(f"• Table '{table}': ✅ {count} rows")
-                except Exception as e:
-                    report.append(f"• Table '{table}': ❌ {str(e)[:30]}")
+                except Exception as exc:
+                    report.append(f"• Table '{table}': ❌ {str(exc)[:30]}")
 
             total_players = await conn.fetchval("SELECT COUNT(*) FROM players")
             active_battles_db = await conn.fetchval("SELECT COUNT(*) FROM battles WHERE status = 'active'")
             report.append(f"• Total players: {total_players}")
             report.append(f"• Active battles (DB): {active_battles_db}")
-    except Exception as e:
-        report.append(f"❌ Database error: {e}")
+    except Exception as exc:
+        report.append(f"❌ Database error: {exc}")
 
     report.append("\n🧠 GLOBAL STATE (IN‑MEMORY)")
     report.append(f"• ongoing_battles: {len(ongoing_battles)} entries")
