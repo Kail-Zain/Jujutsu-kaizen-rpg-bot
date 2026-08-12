@@ -536,7 +536,7 @@ async def apply_vows_to_player(user_id, player_stats):
         player_stats['spd'] = int(player_stats['spd'] * spd_mod)
         return player_stats
 
-# ---------- PVB TIMEOUT CLEANER ----------
+# ---------- PVP TIMEOUT CLEANER ----------
 async def clean_expired_pvp():
     while True:
         await asyncio.sleep(30)
@@ -1574,7 +1574,7 @@ async def story_chapter_cmd(message: types.Message):
         await boss_cmd(message, chapter['boss_name'], is_story=True, chapter_id=chapter['id'])
 
 # ================================================================
-# BOSS & BATTLE
+# BOSS & BATTLE – FIXED INSERT STATEMENTS
 # ================================================================
 async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool = False, chapter_id: int = None):
     if boss_name is None:
@@ -1612,7 +1612,7 @@ async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool
                                      enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
                                      is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp,
                                      vow_effects, participants, is_story, chapter_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 RETURNING id
             """, message.chat.id, user_id, player['hp'], enemy['hp'], 
                enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
@@ -1667,11 +1667,11 @@ async def battle_cmd(message: types.Message):
                                      enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
                                      is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp,
                                      vow_effects, participants)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE, $10, $11, $12, $13, $14)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 RETURNING id
             """, message.chat.id, user_id, player['hp'], enemy['hp'], 
                enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
-               enemy.get('reward_yen', 1000), enemy.get('reward_xp', 100), enemy['hp'],
+               False, enemy.get('reward_yen', 1000), enemy.get('reward_xp', 100), enemy['hp'],
                json.dumps([]), json.dumps([user_id]))
             ongoing_battles[user_id] = battle_id
             set_session(user_id, "battle", battle_id=battle_id, role="player1")
@@ -1754,7 +1754,7 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         await edit_battle_message(callback, caption, keyboard, media_url)
 
 # ================================================================
-# BATTLE CALLBACK HANDLER (bt|*) – FULL IMPLEMENTATION
+# BATTLE CALLBACK HANDLER (bt|*) – unchanged (uses `exc` for exceptions)
 # ================================================================
 @dp.callback_query(lambda c: c.data.startswith("bt|"))
 async def battle_turn_cb(callback: types.CallbackQuery):
@@ -1822,7 +1822,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 return
             player = dict(player_record)
 
-            # Apply binding vows
             player = await apply_vows_to_player(user_id, player)
 
             if battle.get('is_pvp'):
@@ -2356,7 +2355,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
         await callback.answer(f"❌ Error: {str(exc)[:100]}", show_alert=True)
 
 # ================================================================
-# PVP COMMANDS (full implementation)
+# PVP COMMANDS (full implementation) – unchanged
 # ================================================================
 @dp.message(Command("pvp_challenge"))
 @friendly_error
@@ -2934,7 +2933,7 @@ async def resume_cmd(message: types.Message):
         await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)
 
 # ================================================================
-# PRESTIGE, MISSIONS, DAILY, CLAN, RAID, DUNGEON, TOWER, ACHIEVEMENTS, EVENTS, QUESTS, MATERIALS, CRAFT, LEADERBOARD, NPC, AWAKENING
+# PRESTIGE, MISSIONS, DAILY, CLAN, RAID (FIXED INSERT), DUNGEON (FIXED), TOWER (FIXED), ACHIEVEMENTS, EVENTS (FIXED LOOP), QUESTS, MATERIALS, CRAFT, LEADERBOARD, NPC, AWAKENING
 # ================================================================
 
 @dp.message(Command("prestige"))
@@ -3143,6 +3142,9 @@ async def clan_cmd(message: types.Message):
         else:
             await message.reply("❌ Unknown action. Use create, join, info, leave, upgrade, or war.")
 
+# ================================================================
+# RAID – FIXED INSERT
+# ================================================================
 @dp.message(Command("raid"))
 @friendly_error
 async def raid_cmd(message: types.Message):
@@ -3184,12 +3186,12 @@ async def raid_cmd(message: types.Message):
                                  enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
                                  is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp,
                                  vow_effects, participants, is_raid, raid_owner, max_participants)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10, $11, $12, $13, $14, TRUE, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             RETURNING id
         """, message.chat.id, user_id, 0, enemy['hp'], 
            enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
-           enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
-           json.dumps([]), json.dumps(member_ids), user_id, len(member_ids))
+           True, enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
+           json.dumps([]), json.dumps(member_ids), True, user_id, len(member_ids))
         for mid in member_ids:
             ongoing_battles[mid] = battle_id
             set_session(mid, "battle", battle_id=battle_id, role="raid")
@@ -3325,9 +3327,8 @@ async def raid_refresh_cb(callback: types.CallbackQuery):
         await callback.answer("🔄 Refreshed!")
 
 # ================================================================
-# DUNGEON, TOWER, ACHIEVEMENTS, EVENTS, QUESTS, MATERIALS, CRAFT, LEADERBOARD, NPC, AWAKENING
+# DUNGEON – FIXED INSERT
 # ================================================================
-
 @dp.message(Command("dungeon"))
 @friendly_error
 async def dungeon_cmd(message: types.Message):
@@ -3369,17 +3370,20 @@ async def dungeon_cmd(message: types.Message):
                                  enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
                                  is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp,
                                  vow_effects, is_dungeon, dungeon_run_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE, $10, $11, $12, $13, TRUE, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             RETURNING id
         """, message.chat.id, user_id, player['hp'], enemy['hp'], 
            enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
-           enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
-           json.dumps([]), run_id)
+           False, enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
+           json.dumps([]), True, run_id)
         ongoing_battles[user_id] = battle_id
         set_session(user_id, "battle", battle_id=battle_id, role="player1")
         battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp'], "log": []}
         await show_battle_turn(message, battle_id, player, enemy, [])
 
+# ================================================================
+# TOWER – FIXED INSERT
+# ================================================================
 @dp.message(Command("tower"))
 @friendly_error
 async def tower_cmd(message: types.Message):
@@ -3426,16 +3430,20 @@ async def tower_cmd(message: types.Message):
                                  enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
                                  is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp,
                                  vow_effects, is_tower, tower_run_id, tower_floor)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING id
         """, message.chat.id, user_id, player['hp'], enemy['hp'], 
            enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
            is_boss, enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
-           json.dumps([]), run_id, floor)
+           json.dumps([]), True, run_id, floor)
         ongoing_battles[user_id] = battle_id
         set_session(user_id, "battle", battle_id=battle_id, role="player1")
         battle_queues[battle_id] = {"participants": {user_id: []}, "current_hp": enemy['hp'], "log": []}
         await show_battle_turn(message, battle_id, player, enemy, [])
+
+# ================================================================
+# ACHIEVEMENTS, EVENTS (fixed loop), QUESTS, MATERIALS, CRAFT, LEADERBOARD, NPC, AWAKENING
+# ================================================================
 
 @dp.message(Command("achievements"))
 @friendly_error
@@ -3464,7 +3472,7 @@ async def event_cmd(message: types.Message):
             await message.reply("🎯 No active events right now.")
             return
         resp = "🎯 <b>Active Events</b>\n━━━━━━━━━━━━━━━━━━━\n"
-        for ev in events:   # renamed from 'e' to 'ev'
+        for ev in events:   # fixed loop variable – not 'e'
             resp += f"🔥 {ev['event_type'].title()}: <b>{e(ev['boss_name'])}</b>\n"
             resp += f"⏳ Ends: {ev['end_time'].strftime('%Y-%m-%d %H:%M')}\n"
             if ev.get('reward_pool'):
@@ -3473,6 +3481,9 @@ async def event_cmd(message: types.Message):
             resp += f"Use /event_battle {ev['id']} to fight!\n\n"
         await message.reply(resp, parse_mode="HTML")
 
+# ================================================================
+# EVENT BATTLE – FIXED INSERT
+# ================================================================
 @dp.message(Command("event_battle"))
 @friendly_error
 async def event_battle_cmd(message: types.Message):
@@ -3510,12 +3521,12 @@ async def event_battle_cmd(message: types.Message):
                                  enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
                                  is_boss, enemy_reward_yen, enemy_reward_xp, enemy_max_hp,
                                  vow_effects, participants, is_event, event_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10, $11, $12, $13, $14, TRUE, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING id
         """, message.chat.id, user_id, player['hp'], enemy['hp'],
            enemy['name'], enemy['rank'], enemy['atk'], enemy['def'], enemy['spd'],
-           enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
-           json.dumps([]), json.dumps([user_id]), event_id)
+           True, enemy['reward_yen'], enemy['reward_xp'], enemy['hp'],
+           json.dumps([]), json.dumps([user_id]), True, event_id)
         ongoing_battles[user_id] = battle_id
         set_session(user_id, "battle", battle_id=battle_id, role="player1")
         battle_queues[battle_id] = {
@@ -3532,6 +3543,10 @@ async def event_battle_cmd(message: types.Message):
         vow_effects = [v['effect'] for v in active_vows]
         await conn.execute("UPDATE battles SET vow_effects = $1 WHERE id = $2", json.dumps(vow_effects), battle_id)
         await show_battle_turn(message, battle_id, player, enemy, vow_effects)
+
+# ================================================================
+# QUESTS, MATERIALS, CRAFT, LEADERBOARD, NPC, AWAKENING (unchanged)
+# ================================================================
 
 @dp.message(Command("quests"))
 @friendly_error
@@ -3824,7 +3839,7 @@ async def commands_cmd(message: types.Message):
     )
 
 # ================================================================
-# ADMIN & OWNER COMMANDS
+# ADMIN & OWNER COMMANDS (unchanged)
 # ================================================================
 
 @dp.message(Command("addadmin"))
