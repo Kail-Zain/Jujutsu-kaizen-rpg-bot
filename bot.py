@@ -612,6 +612,22 @@ async def edit_battle_message(callback: types.CallbackQuery, caption: str, reply
         else:
             logging.error(f"Edit battle message error: {exc}")
 
+# ---------- NOTIFY PLAYER (DM + fallback) ----------
+async def notify_player(next_player: int, battle_id: int, chat_id: int, bot_instance=None):
+    """Try to DM the player; if fails, mention them in the group chat."""
+    if bot_instance is None:
+        bot_instance = bot
+    try:
+        await bot_instance.send_message(next_player, f"⚔️ Your turn in battle {battle_id}! Check the group chat.")
+        return
+    except Exception:
+        try:
+            next_user = await bot_instance.get_chat(next_player)
+            mention = f"<a href='tg://user?id={next_player}'>{next_user.first_name}</a>" if next_user else f"Player {next_player}"
+            await bot_instance.send_message(chat_id, f"⏳ {mention}, it's your turn in battle {battle_id}!", parse_mode="HTML")
+        except Exception as e:
+            logging.warning(f"Failed to notify {next_player}: {e}")
+
 # ---------- STARTUP / SHUTDOWN ----------
 async def on_startup():
     global db_pool
@@ -640,7 +656,6 @@ def friendly_error(func):
                         if cmd in ['battle', 'boss', 'pvp_challenge', 'dungeon', 'tower', 'raid']:
                             await message.reply("⚠️ You're already in a session! Finish or use /status to resume.")
                             return
-                # Check if command exists in ALL_COMMANDS
                 if cmd not in ALL_COMMANDS:
                     matches = difflib.get_close_matches(cmd, ALL_COMMANDS, n=3, cutoff=0.7)
                     if matches:
@@ -669,7 +684,7 @@ def friendly_error(func):
     return wrapper
 
 # ================================================================
-# COMMANDS – ALL IMPLEMENTED FULLY
+# COMMANDS
 # ================================================================
 
 @dp.message(Command("start"))
@@ -1608,7 +1623,7 @@ async def story_chapter_cmd(message: types.Message):
         await boss_cmd(message, chapter['boss_name'], is_story=True, chapter_id=chapter['id'])
 
 # ================================================================
-# BOSS & BATTLE – FULL IMPLEMENTATION
+# BOSS & BATTLE
 # ================================================================
 async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool = False, chapter_id: int = None):
     if boss_name is None:
@@ -1787,7 +1802,7 @@ async def show_battle_turn(message_or_callback, battle_id, player, enemy, vow_ef
         media_url = enemy.get('image_url') or EFFECTS["default_domain"]
         await edit_battle_message(callback, caption, keyboard, media_url)
 
-# ---------- BATTLE CALLBACK (bt|) – FULL IMPLEMENTATION ----------
+# ---------- BATTLE CALLBACK (bt|) – FULL ----------
 @dp.callback_query(lambda c: c.data.startswith("bt|"))
 async def battle_turn_cb(callback: types.CallbackQuery):
     data = callback.data
@@ -1854,7 +1869,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 return
             player = dict(player_record)
 
-            # Apply binding vows
             player = await apply_vows_to_player(user_id, player)
 
             if battle.get('is_pvp'):
@@ -2109,7 +2123,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                 for move in queue:
                     mtype = move['type']
                     if mtype == 'attack':
-                        # Apply DEF reduction
                         base_dmg = player['atk'] * random.uniform(0.8, 1.2)
                         reduction = enemy['def'] * 0.5
                         dmg = max(1, int(base_dmg - reduction))
@@ -2149,7 +2162,6 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     elif mtype == 'domain':
                         domain_name = move.get('domain_name')
                         dmg_mult = move.get('dmg_mult', 3.5)
-                        # Domain ignores DEF
                         dmg = max(1, int(player['atk'] * float(dmg_mult) * random.uniform(0.9, 1.1)))
                         total_damage += dmg
                         exec_log.append(f"🌐 <b>Domain: {domain_name}</b> (Sure-Hit, {dmg} damage)")
@@ -2218,7 +2230,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                     await conn.execute("UPDATE battles SET current_hp1 = $1 WHERE id = $2", new_player_hp, battle_id)
                     player['hp'] = new_player_hp
                 else:
-                    new_player_hp = battle['current_hp1']  # PvP HP handled separately
+                    new_player_hp = battle['current_hp1']
 
                 battle_queues[battle_id]['log'].extend(exec_log)
                 if len(battle_queues[battle_id]['log']) > 10:
@@ -2405,6 +2417,7 @@ async def battle_turn_cb(callback: types.CallbackQuery):
 # ================================================================
 # PVP – FULL UPGRADED IMPLEMENTATION
 # ================================================================
+
 @dp.message(Command("pvp_challenge"))
 @friendly_error
 async def pvp_challenge(message: types.Message):
@@ -2488,21 +2501,20 @@ async def pvp_accept(message: types.Message):
             "player2": dict(p2),
             "chat_id": message.chat.id,
             "message_id": None,
-            "defend_flag": None  # store who is defending
+            "defend_flag": None
         }
         first = random.choice([battle['player1_id'], battle['player2_id']])
         battle_queues[battle_id]['turn_player'] = first
 
         await send_or_update_pvp_battle(battle_id, chat_id=message.chat.id)
 
+        # Notify both players (DM first, fallback group mention) – but battle message is already in group
         for pid in [battle['player1_id'], battle['player2_id']]:
+            msg = f"⚔️ Your turn! Check the battle in the group chat." if pid == first else f"⚔️ PVP BATTLE START! Wait for your turn in the group chat."
             try:
-                if pid == first:
-                    await bot.send_message(pid, f"⚔️ Your turn! Check the battle in the group chat.")
-                else:
-                    await bot.send_message(pid, f"⚔️ PVP BATTLE START! Wait for your turn in the group chat.")
-            except:
-                pass
+                await bot.send_message(pid, msg)
+            except Exception:
+                pass  # group mention not needed because the battle message is already there
 
 def render_pvp_battle(battle_id, viewer_id=None):
     q = battle_queues.get(battle_id)
@@ -2525,7 +2537,6 @@ def render_pvp_battle(battle_id, viewer_id=None):
     ce_bar1 = build_ce_bar(ce1, p1['max_ce'])
     ce_bar2 = build_ce_bar(ce2, p2['max_ce'])
 
-    # Determine if viewer is the one whose turn it is
     if viewer_id == turn:
         turn_indicator = "🔵 <b>YOUR TURN</b>"
     elif turn in (p1['user_id'], p2['user_id']):
@@ -2577,25 +2588,30 @@ async def send_or_update_pvp_battle(battle_id, chat_id=None, callback=None):
     if callback:
         try:
             await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+            q['message_id'] = callback.message.message_id
+            q['chat_id'] = callback.message.chat.id
+            return
         except Exception as exc:
             logging.error(f"Failed to edit PvP message: {exc}")
             new_msg = await callback.message.reply(text, reply_markup=keyboard, parse_mode="HTML")
             q['message_id'] = new_msg.message_id
             q['chat_id'] = new_msg.chat.id
-    elif chat_id:
+            return
+
+    if chat_id:
         sent = await bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="HTML")
         q['message_id'] = sent.message_id
         q['chat_id'] = chat_id
-    else:
-        if q.get('message_id') and q.get('chat_id'):
-            try:
-                await bot.edit_message_text(text, chat_id=q['chat_id'], message_id=q['message_id'], reply_markup=keyboard, parse_mode="HTML")
-            except Exception as exc:
-                logging.error(f"Failed to edit PvP message: {exc}")
-                sent = await bot.send_message(q['chat_id'], text, reply_markup=keyboard, parse_mode="HTML")
-                q['message_id'] = sent.message_id
-        else:
-            logging.error("No message ID to edit.")
+        return
+
+    if q.get('message_id') and q.get('chat_id'):
+        try:
+            await bot.edit_message_text(text, chat_id=q['chat_id'], message_id=q['message_id'], reply_markup=keyboard, parse_mode="HTML")
+        except Exception as exc:
+            logging.error(f"Failed to edit PvP message: {exc}")
+            sent = await bot.send_message(q['chat_id'], text, reply_markup=keyboard, parse_mode="HTML")
+            q['message_id'] = sent.message_id
+            q['chat_id'] = sent.chat.id
 
 @dp.callback_query(lambda c: c.data.startswith("pvp_quick"))
 async def pvp_quick_cb(callback: types.CallbackQuery):
@@ -2624,14 +2640,10 @@ async def pvp_quick_cb(callback: types.CallbackQuery):
             opponent_id = battle['player2_id']
             opponent_hp = q['current_hp2']
             opponent_def = q['player2']['def']
-            my_hp = q['current_hp1']
-            my_ce = q['player1']['ce']
         else:
             opponent_id = battle['player1_id']
             opponent_hp = q['current_hp1']
             opponent_def = q['player1']['def']
-            my_hp = q['current_hp2']
-            my_ce = q['player2']['ce']
 
         damage = 0
         effect_msg = ""
@@ -2662,7 +2674,6 @@ async def pvp_quick_cb(callback: types.CallbackQuery):
             return
 
         if damage > 0:
-            # Check if defender has defend_flag
             if q.get('defend_flag') == opponent_id:
                 damage = damage // 2
                 q['defend_flag'] = None
@@ -2675,6 +2686,7 @@ async def pvp_quick_cb(callback: types.CallbackQuery):
                 q['current_hp1'] = new_opp_hp
             await conn.execute("UPDATE battles SET current_hp1 = $1, current_hp2 = $2 WHERE id = $3",
                                q['current_hp1'], q['current_hp2'], battle_id)
+            logging.info(f"PvP attack: {user_id} dealt {damage} damage. New opponent HP: {new_opp_hp}")
         else:
             new_opp_hp = opponent_hp
 
@@ -2691,19 +2703,10 @@ async def pvp_quick_cb(callback: types.CallbackQuery):
 
         await send_or_update_pvp_battle(battle_id, callback=callback)
 
-        # Notify next player: DM + group mention
-        try:
-            await bot.send_message(next_player, f"⚔️ Your turn in battle {battle_id}! Check the group chat.")
-        except Exception as e:
-            logging.warning(f"DM failed for {next_player}: {e}")
+        # Notify next player: try DM, fallback to group mention
         chat_id = q.get('chat_id')
         if chat_id:
-            try:
-                next_user = await bot.get_chat(next_player)
-                mention = f"<a href='tg://user?id={next_player}'>{next_user.first_name}</a>" if next_user else f"Player {next_player}"
-                await bot.send_message(chat_id, f"⏳ {mention}, it's your turn in battle {battle_id}!", parse_mode="HTML")
-            except:
-                pass
+            await notify_player(next_player, battle_id, chat_id)
 
         await callback.answer("✅ Move executed!")
 
@@ -2776,7 +2779,6 @@ async def pvp_quick_tech_cb(callback: types.CallbackQuery):
             q['player2']['ce'] = player['ce']
 
         dmg_mult = float(tech['damage_multiplier'])
-        # Apply DEF reduction
         if user_id == battle['player1_id']:
             opponent_def = q['player2']['def']
         else:
@@ -2798,6 +2800,7 @@ async def pvp_quick_tech_cb(callback: types.CallbackQuery):
             q['current_hp1'] = new_opp_hp
         await conn.execute("UPDATE battles SET current_hp1 = $1, current_hp2 = $2 WHERE id = $3",
                            q['current_hp1'], q['current_hp2'], battle_id)
+        logging.info(f"PvP Tech: {user_id} used {tech_name} for {damage} damage. New opponent HP: {new_opp_hp}")
 
         # Animation
         if "Purple" in tech_name:
@@ -2823,19 +2826,9 @@ async def pvp_quick_tech_cb(callback: types.CallbackQuery):
 
         await send_or_update_pvp_battle(battle_id, callback=callback)
 
-        # Notify next player
-        try:
-            await bot.send_message(next_player, f"⚔️ Your turn in battle {battle_id}!")
-        except:
-            pass
         chat_id = q.get('chat_id')
         if chat_id:
-            try:
-                next_user = await bot.get_chat(next_player)
-                mention = f"<a href='tg://user?id={next_player}'>{next_user.first_name}</a>" if next_user else f"Player {next_player}"
-                await bot.send_message(chat_id, f"⏳ {mention}, it's your turn!", parse_mode="HTML")
-            except:
-                pass
+            await notify_player(next_player, battle_id, chat_id)
 
         await callback.answer("✅ Technique executed!")
 
@@ -2923,6 +2916,7 @@ async def pvp_quick_domain_cb(callback: types.CallbackQuery):
             q['current_hp1'] = new_opp_hp
         await conn.execute("UPDATE battles SET current_hp1 = $1, current_hp2 = $2 WHERE id = $3",
                            q['current_hp1'], q['current_hp2'], battle_id)
+        logging.info(f"PvP Domain: {user_id} used {domain_name} for {damage} damage. New opponent HP: {new_opp_hp}")
 
         # Animation
         if "Unlimited Void" in domain_name:
@@ -2948,18 +2942,9 @@ async def pvp_quick_domain_cb(callback: types.CallbackQuery):
 
         await send_or_update_pvp_battle(battle_id, callback=callback)
 
-        try:
-            await bot.send_message(next_player, f"⚔️ Your turn in battle {battle_id}!")
-        except:
-            pass
         chat_id = q.get('chat_id')
         if chat_id:
-            try:
-                next_user = await bot.get_chat(next_player)
-                mention = f"<a href='tg://user?id={next_player}'>{next_user.first_name}</a>" if next_user else f"Player {next_player}"
-                await bot.send_message(chat_id, f"⏳ {mention}, it's your turn!", parse_mode="HTML")
-            except:
-                pass
+            await notify_player(next_player, battle_id, chat_id)
 
         await callback.answer("✅ Domain expanded!")
 
