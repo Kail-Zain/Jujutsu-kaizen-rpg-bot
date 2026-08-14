@@ -210,7 +210,7 @@ ALL_COMMANDS = [
     "removelevel", "recalc", "diagnosis", "clearbattles",
     "event", "event_battle", "quests", "quest_accept", "quest_reward",
     "materials", "craft", "leaderboard", "broadcast",
-    "raid", "raid_attack", "users"
+    "raid", "raid_attack", "users" "bosses"
 ]
 
 def set_session(user_id, session_type, **kwargs):
