@@ -210,7 +210,7 @@ ALL_COMMANDS = [
     "removelevel", "recalc", "diagnosis", "clearbattles",
     "event", "event_battle", "quests", "quest_accept", "quest_reward",
     "materials", "craft", "leaderboard", "broadcast",
-    "raid", "raid_attack"
+    "raid", "raid_attack", "users"
 ]
 
 def set_session(user_id, session_type, **kwargs):
@@ -614,7 +614,6 @@ async def edit_battle_message(callback: types.CallbackQuery, caption: str, reply
 
 # ---------- NOTIFY PLAYER (DM + fallback) ----------
 async def notify_player(next_player: int, battle_id: int, chat_id: int, bot_instance=None):
-    """Try to DM the player; if fails, mention them in the group chat."""
     if bot_instance is None:
         bot_instance = bot
     try:
@@ -3008,7 +3007,7 @@ async def status_cmd(message: types.Message):
                     other_player = await conn.fetchrow("SELECT username, character_name FROM players WHERE user_id = $1", other_id)
                     enemy_name = e(other_player['username'] or other_player['character_name'] or "Opponent")
                     your_hp = battle['current_hp1'] if user_id == battle['player1_id'] else battle['current_hp2']
-                    enemy_hp = battle['current_hp2'] if user_id == battle['player1_id'] else battle['current_hp1']
+                    enemy_hp = battle['current_hp2'] if user_id == battle['player1_id'] else battle['current_hp2']
                 else:
                     enemy_name = e(battle['enemy_name'] or "Enemy")
                     your_hp = battle['current_hp1']
@@ -3069,9 +3068,7 @@ async def resume_cmd(message: types.Message):
         vows = json.loads(battle.get('vow_effects', '[]'))
         log_lines = battle_queues[battle_id].get('log', [])
         set_session(user_id, "battle", battle_id=battle_id, role="player1")
-        await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)
-
-# ================================================================
+        await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)# ================================================================
 # OTHER COMMANDS (Prestige, Missions, Daily, Clan, Raid, Dungeon, Tower, Achievements, Events, Quests, Materials, Craft, Leaderboard, NPC, Awakening)
 # ================================================================
 
@@ -4300,7 +4297,7 @@ async def diagnosis_cmd(message: types.Message):
         "removelevel", "recalc", "diagnosis", "clearbattles",
         "event", "event_battle", "quests", "quest_accept", "quest_reward",
         "materials", "craft", "leaderboard", "broadcast",
-        "raid", "raid_attack"
+        "raid", "raid_attack", "users"
     ]
     report.append(f"• Total commands: {len(cmd_list)}")
     report.append(f"• List: {', '.join(cmd_list)}")
@@ -4360,6 +4357,27 @@ async def broadcast_cmd(message: types.Message):
             except:
                 pass
         await message.reply(f"✅ Broadcast sent to {sent} players.")
+
+# ================================================================
+# USERS COMMAND (Admin/Owner only)
+# ================================================================
+@dp.message(Command("users"))
+@friendly_error
+async def users_cmd(message: types.Message):
+    if not await is_owner(message.from_user.id) and not await is_admin(message.from_user.id):
+        await message.reply("❌ Admin or Owner only!")
+        return
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, username, first_name, level FROM players ORDER BY user_id LIMIT 50")
+        if not rows:
+            await message.reply("📭 No players found.")
+            return
+        txt = "📋 **Registered Users (Recent 50):**\n\n"
+        for idx, row in enumerate(rows, 1):
+            username = f"@{row['username']}" if row['username'] else "No username"
+            name = e(row['first_name'] or "Unknown")
+            txt += f"{idx}. `{row['user_id']}` — {name} ({username}) [Lv.{row['level']}]\n"
+        await message.reply(txt, parse_mode="HTML")
 
 # ================================================================
 # MAIN
