@@ -1,4 +1,4 @@
-import asyncio
+ import asyncio
 import os
 import random
 import json
@@ -26,6 +26,7 @@ OWNER_ID = 8609946980
 OWNER_NAME = "𝕄𝕒𝕩𝕨𝕖𝕝𝕝-𝟜𝟟"
 YEN_PURCHASE_INFO = f"💰 <b>Buy Yen</b> — Contact {html.escape(OWNER_NAME)} directly."
 MAX_YEN = 999999999
+CURRENT_SEASON = "Culling Games"  # Used for the Season Pass
 
 # ---------- QUOTES ----------
 CHARACTER_QUOTES = {
@@ -147,6 +148,18 @@ SPECIAL_QUOTES = {
     ],
 }
 
+# ---------- NEW: BOSS CINEMATIC INTROS ----------
+BOSS_CINEMATICS = {
+    "Jogo": "💥 \"You think you can match a Disaster Curse? BURN!\" - Jogo grins wickedly.",
+    "Hanami": "🌿 \"Nature will reclaim this world. You are nothing but pests.\" - Hanami declares.",
+    "Dagon": "🌊 \"Welcome to my watery abyss. You will drown here!\" - Dagon bellows.",
+    "Mahito": "👹 \"I am the true embodiment of humanity! Let me touch your soul...\" - Mahito smiles.",
+    "Mahoraga": "🌀 \"The Divine General adjusts to all attacks! DESTROY!\" - The wheel spins.",
+    "Sukuna": "🔥 \"You are merely a fly trying to swat a god. Bow down.\" - Sukuna sneers.",
+    "Kenjaku": "🔮 \"All according to plan. You are just a pawn.\" - Kenjaku laughs.",
+    "default": "⚔️ The Cursed Spirit roars, unleashing its full malice upon you!"
+}
+
 def get_jjk_quote(character_name=None, event_type=None):
     if event_type and event_type in SPECIAL_QUOTES:
         return random.choice(SPECIAL_QUOTES[event_type])
@@ -154,6 +167,9 @@ def get_jjk_quote(character_name=None, event_type=None):
     if not quotes:
         quotes = CHARACTER_QUOTES["default"]
     return random.choice(quotes)
+
+def get_boss_intro(boss_name):
+    return BOSS_CINEMATICS.get(boss_name, BOSS_CINEMATICS["default"])
 
 # ---------- EFFECTS ----------
 EFFECTS = {
@@ -195,13 +211,15 @@ ongoing_battles = {}
 battle_queues = {}
 pvp_matches = {}
 user_sessions = {}
+npc_sessions = {}  # NEW: Dict to track NPC text fallbacks
 
 # ---------- COMMAND LIST FOR CORRECTION ----------
 ALL_COMMANDS = [
     "start", "guide", "stats", "addyenall", "removeyenall",
-    "restriction", "vow", "shikigami", "profile", "characters",
+    "restriction", "vow", "vow_status",  # Added vow_status
+    "shikigami", "profile", "characters",
     "select", "shop", "buy", "bag", "use", "equip", "learn",
-    "techniques", "enemies", "story", "story_chapter", "boss",
+    "techniques", "enemies", "story", "story_chapter", "boss", "bosses", # Added bosses
     "battle", "status", "resume", "prestige", "pvp_challenge",
     "pvp_accept", "missions", "daily", "clan",
     "awakening", "npc", "dungeon", "tower", "achievements",
@@ -210,7 +228,7 @@ ALL_COMMANDS = [
     "removelevel", "recalc", "diagnosis", "clearbattles",
     "event", "event_battle", "quests", "quest_accept", "quest_reward",
     "materials", "craft", "leaderboard", "broadcast",
-    "raid", "raid_attack", "users" "bosses"
+    "raid", "raid_attack", "users", "bosses", "toggles", "inspect", "season" # Added toggles, inspect, season
 ]
 
 def set_session(user_id, session_type, **kwargs):
@@ -1569,6 +1587,19 @@ async def enemies_cmd(message: types.Message):
         )
         await message.reply(response, parse_mode="HTML")
 
+@dp.message(Command("bosses"))
+@friendly_error
+async def bosses_cmd(message: types.Message):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT name, grade, level FROM enemies WHERE is_boss = TRUE ORDER BY name")
+        if not rows:
+            await message.reply("👹 No bosses available right now.")
+            return
+        txt = "👹 **Available Bosses:**\n\n"
+        for r in rows:
+            txt += f"• **{r['name']}** - Grade {r['grade']} (Lv.{r['level']})\n"
+        await message.reply(txt, parse_mode="HTML")
+
 @dp.message(Command("story"))
 @friendly_error
 async def story_cmd(message: types.Message):
@@ -1655,6 +1686,10 @@ async def boss_cmd(message: types.Message, boss_name: str = None, is_story: bool
 
             enemy = scale_enemy_to_player(player, enemy_base)
             await safe_send_media(message, 'animation', EFFECTS["versus"])
+            
+            # --- NEW: Boss Cinematic Intro ---
+            await message.reply(f"💥 **{enemy['name']}** appears!\n<i>{get_boss_intro(enemy['name'])}</i>", parse_mode="HTML")
+
             battle_id = await conn.fetchval("""
                 INSERT INTO battles (chat_id, player1_id, current_hp1, current_hp2, 
                                      enemy_name, enemy_rank, enemy_atk, enemy_def, enemy_spd,
@@ -2280,6 +2315,32 @@ async def battle_turn_cb(callback: types.CallbackQuery):
                         await update_player_stats(player['user_id'])
                         await check_achievements(user_id)
                         await update_missions(user_id, "wins", 1)
+
+                        # --- NEW: 1. CURSE MARKS (RNG Fragment Drops) ---
+                        if is_boss and random.random() < 0.05:
+                            frag_name = f"{battle['enemy_name']} Fragment"
+                            await conn.execute("UPDATE players SET cursed_marks = cursed_marks || $1 WHERE user_id = $2", json.dumps([frag_name]), user_id)
+                            await callback.message.reply(f"🌀 **Curse Mark Absorbed!** You have absorbed the power of {e(battle['enemy_name'])}! (+{frag_name})")
+
+                        # --- NEW: 2. SEASON PASS PROGRESSION ---
+                        await conn.execute("UPDATE players SET season_progress = season_progress + 1 WHERE user_id = $1", user_id)
+                        season_prog = await conn.fetchval("SELECT season_progress FROM players WHERE user_id = $1", user_id)
+                        if season_prog % 10 == 0 and season_prog > 0:
+                            await callback.message.reply(f"📅 **Season Pass Progress!** You reached Tier {season_prog//10} in {CURRENT_SEASON}!")
+
+                        # --- NEW: 3. HALL OF FAME (Legendary Broadcasts) ---
+                        if player.get('legendary_tag') == False:
+                            milestone = False
+                            if player['level'] >= 100: milestone = True
+                            elif player['prestige_level'] >= 5: milestone = True
+                            if milestone:
+                                await conn.execute("UPDATE players SET legendary_tag = TRUE WHERE user_id = $1", user_id)
+                                all_users = await conn.fetch("SELECT user_id FROM players")
+                                for u in all_users:
+                                    try:
+                                        await bot.send_message(u['user_id'], f"🌍 **BREAKING NEWS!** {e(player['username'])} has achieved Legendary status! The age of sorcerers is upon us!")
+                                    except: pass
+
                         if is_boss:
                             await update_missions(user_id, "boss_kills", 1)
                             await update_quests(user_id, "boss_kills", 1)
@@ -3068,7 +3129,9 @@ async def resume_cmd(message: types.Message):
         vows = json.loads(battle.get('vow_effects', '[]'))
         log_lines = battle_queues[battle_id].get('log', [])
         set_session(user_id, "battle", battle_id=battle_id, role="player1")
-        await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)# ================================================================
+        await show_battle_turn(message, battle_id, player, enemy, vows, log_lines)
+
+# ================================================================
 # OTHER COMMANDS (Prestige, Missions, Daily, Clan, Raid, Dungeon, Tower, Achievements, Events, Quests, Materials, Craft, Leaderboard, NPC, Awakening)
 # ================================================================
 
@@ -3865,16 +3928,35 @@ async def npc_cmd(message: types.Message):
             if not npc:
                 await message.reply(f"❌ NPC '{name}' not found.")
                 return
-            responses = {
-                "Gojo Satoru": "Hey there, weakling. Want to train? It'll cost you 50 CE.",
-                "Nanami Kento": "I have some overtime quests if you're interested.",
-                "Mei Mei": "Everything has a price, darling. Even my advice.",
-                "Utahime Iori": "I can perform a ritual to heal you. Focus.",
-                "Shoko Ieiri": "Medic here. I can patch you up. At a price.",
-                "Tengen": "The barriers of this world are thin. Seek the truth.",
-            }
-            reply = responses.get(npc['name'], f"{npc['name']}: {npc['description']}")
-            await message.reply(f"🧙 <b>{e(npc['name'])}</b> says:\n{e(reply)}", parse_mode="HTML")
+            
+            # -- NEW: Set session for text fallback --
+            npc_sessions[message.from_user.id] = npc['id']
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Yes", callback_data=f"npc_yes_{npc['id']}"),
+                 InlineKeyboardButton(text="❌ No", callback_data=f"npc_no_{npc['id']}")]
+            ])
+            await message.reply(f"🧙 <b>{e(npc['name'])}</b> says:\n{npc['dialogue']}", reply_markup=keyboard, parse_mode="HTML")
+
+# -- NEW: NPC Button Fallbacks --
+@dp.callback_query(lambda c: c.data.startswith("npc_yes_"))
+async def npc_yes_cb(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    async with db_pool.acquire() as conn:
+        player = await conn.fetchrow("SELECT ce FROM players WHERE user_id=$1", user_id)
+        if not player or player['ce'] < 50:
+            await callback.answer("❌ Not enough CE!", show_alert=True); return
+        await conn.execute("UPDATE players SET ce = ce - 50, xp = xp + 20 WHERE user_id = $1", user_id)
+        await callback.message.edit_text("✅ You trained! -50 CE, +20 XP.")
+    if user_id in npc_sessions: del npc_sessions[user_id]
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("npc_no_"))
+async def npc_no_cb(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    await callback.message.edit_text("❌ You walked away.")
+    if user_id in npc_sessions: del npc_sessions[user_id]
+    await callback.answer()
 
 @dp.message(Command("awakening"))
 @friendly_error
@@ -3959,9 +4041,7 @@ async def commands_cmd(message: types.Message):
         "<b>Owner</b> (full access)\n"
         "/addyen, /removeyen, /addyenall, /removeyenall, /addxp, /removexp, /setrank, /addlevel, /removelevel, /recalc, /diagnosis, /clearbattles",
         parse_mode="HTML"
-    )
-
-# ================================================================
+    ) # ================================================================
 # ADMIN & OWNER COMMANDS
 # ================================================================
 
@@ -4359,8 +4439,9 @@ async def broadcast_cmd(message: types.Message):
         await message.reply(f"✅ Broadcast sent to {sent} players.")
 
 # ================================================================
-# USERS COMMAND (Admin/Owner only)
+# NEW QOL COMMANDS (TOGGLES, VOW_STATUS, INSPECT, SEASON)
 # ================================================================
+
 @dp.message(Command("users"))
 @friendly_error
 async def users_cmd(message: types.Message):
@@ -4379,12 +4460,94 @@ async def users_cmd(message: types.Message):
             txt += f"{idx}. `{row['user_id']}` — {name} ({username}) [Lv.{row['level']}]\n"
         await message.reply(txt, parse_mode="HTML")
 
+@dp.message(Command("toggles"))
+@friendly_error
+async def toggles_cmd(message: types.Message):
+    args = message.text.split()
+    if len(args) < 2: return await message.reply("📝 Usage: /toggles detailed | /toggles brief")
+    mode = args[1].lower()
+    if mode not in ['detailed', 'brief']: return await message.reply("❌ Invalid mode. Choose 'detailed' or 'brief'.")
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE players SET battle_mode = $1 WHERE user_id = $2", mode, message.from_user.id)
+    await message.reply(f"✅ Battle mode set to <b>{mode.capitalize()}</b>.", parse_mode="HTML")
+
+@dp.message(Command("vow_status"))
+@friendly_error
+async def vow_status_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        vows = await conn.fetch("SELECT v.name, pv.last_used, v.cooldown, pv.active FROM player_vows pv JOIN binding_vows v ON pv.vow_id = v.id WHERE pv.player_id = $1", user_id)
+        if not vows: return await message.reply("❌ You have no Binding Vows.")
+        resp = "⚖️ <b>Vow Status</b>\n━━━━━━━━━━━━\n"
+        now = datetime.now()
+        for v in vows:
+            if v['active']:
+                remaining = max(0, (v['last_used'] + timedelta(minutes=v['cooldown']) - now).total_seconds())
+                resp += f"• {e(v['name'])}: Active (Cooldown: {int(remaining)}s)\n"
+            else:
+                resp += f"• {e(v['name'])}: Inactive/Expired\n"
+        await message.reply(resp, parse_mode="HTML")
+
+@dp.message(Command("inspect"))
+@friendly_error
+async def inspect_cmd(message: types.Message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2: return await message.reply("📝 Usage: /inspect @user")
+    target = args[1].replace("@", "")
+    async with db_pool.acquire() as conn:
+        p = await conn.fetchrow("SELECT username, level, prestige_level, character_name, wins, losses, boss_kills, curse_rank FROM players WHERE username ILIKE $1", target)
+        if not p: return await message.reply(f"❌ User '{target}' not found.")
+        resp = f"👤 <b>{e(p['username'])}</b>\n━━━━━━━━━━━━\n🎭 {e(p['character_name'])}\n📊 Level: {p['level']}\n💎 Prestige: {p['prestige_level']}\n🏆 {p['wins']} W | {p['losses']} L\n👑 Boss Kills: {p['boss_kills']}\n👹 Curse Rank: {e(p['curse_rank'])}"
+        await message.reply(resp, parse_mode="HTML")
+
+@dp.message(Command("season"))
+@friendly_error
+async def season_cmd(message: types.Message):
+    user_id = message.from_user.id
+    async with db_pool.acquire() as conn:
+        prog = await conn.fetchval("SELECT season_progress FROM players WHERE user_id = $1", user_id) or 0
+        tier = prog // 10
+        await message.reply(f"📅 <b>Season: {CURRENT_SEASON}</b>\n━━━━━━━━━━━━\nPoints: {prog}\nCurrent Tier: {tier}\nNext Reward at: {(tier+1)*10} points", parse_mode="HTML")
+
 # ================================================================
-# MAIN
+# NPC TEXT FALLBACK & TYPO HANDLER
 # ================================================================
+
+@dp.message()
+async def npc_text_fallback(message: types.Message):
+    user_id = message.from_user.id
+    if message.text.startswith('/') or user_id not in npc_sessions: return
+    text = message.text.lower()
+    async with db_pool.acquire() as conn:
+        if text in ['yes', 'yeq', 'yep', 'yeah', 'y']:
+            npc_id = npc_sessions[user_id]
+            player = await conn.fetchrow("SELECT ce FROM players WHERE user_id = $1", user_id)
+            if player and player['ce'] >= 50:
+                await conn.execute("UPDATE players SET ce = ce - 50, xp = xp + 20 WHERE user_id = $1", user_id)
+                await message.reply("✅ You trained! -50 CE, +20 XP.")
+            else: await message.reply("❌ Not enough CE!")
+            del npc_sessions[user_id]
+            return
+        elif text in ['no', 'n', 'nah']:
+            del npc_sessions[user_id]; await message.reply("❌ You walked away.")
+
+@dp.message()
+async def typo_handler(message: types.Message):
+    if not message.text.startswith('/'): return
+    cmd = message.text.split()[0].lower().lstrip('/')
+    if cmd in ALL_COMMANDS: return
+    matches = difflib.get_close_matches(cmd, ALL_COMMANDS, n=3, cutoff=0.7)
+    if matches: await message.reply(f"❓ Unknown command `/{cmd}`. Did you mean: {', '.join([f'/{m}' for m in matches])}?")
+    else: await message.reply(f"❓ Unknown command `/{cmd}`. Type /commands for the full list.")
+
+# ================================================================
+# MAIN LOOP
+# ================================================================
+
 async def main():
     await on_startup()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+            
