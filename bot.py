@@ -4914,16 +4914,17 @@ async def season_cmd(message: types.Message):
         tier = prog // 10
         await message.reply(f"📅 **Season: {CURRENT_SEASON}**\nPoints: {prog}\nCurrent Tier: {tier}\nNext Reward at: {(tier+1)*10}")
 
-@dp.message(Command("season_claim"))
+        @dp.message(Command("season_claim"))
 @friendly_error
 async def season_claim_cmd(message: types.Message):
     user_id = message.from_user.id
     async with db_pool.acquire() as conn:
-        prog = await conn.fetchval("SELECT season_progress, claimed_tier FROM players WHERE user_id=$1", user_id) or 0
-        if not prog:
+        row = await conn.fetchrow("SELECT season_progress, claimed_tier FROM players WHERE user_id=$1", user_id)
+        if not row:
             return await message.reply("❌ You have no season progress.")
+        prog = row['season_progress'] or 0
+        claimed = row['claimed_tier'] or 0
         current_tier = prog // 10
-        claimed = prog[1] if isinstance(prog, tuple) else 0
         if current_tier <= claimed:
             return await message.reply("❌ No new rewards to claim.")
         reward_yen = (current_tier - claimed) * 500
@@ -4951,12 +4952,6 @@ async def typo_handler(message: types.Message):
             f"❓ Unknown command `/{cmd}`.\n"
             f"Type /commands to see all available commands."
         )
-# --- Admin commands: addadmin, removeadmin, addyen, removeyen, addxp, removexp, setrank, addlevel, removelevel, recalc, diagnosis, clearbattles, broadcast ---
-# (These are mostly identical to previous code; I'll include them if needed but you already have them in your old bot.py.)
-# ================================================================
-# MAIN LOOP
-# ================================================================
-
 async def main():
     await on_startup()
     await dp.start_polling(bot)
