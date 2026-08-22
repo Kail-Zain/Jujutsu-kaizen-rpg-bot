@@ -4930,7 +4930,27 @@ async def season_claim_cmd(message: types.Message):
         await conn.execute("UPDATE players SET yen=LEAST(yen+$1,$2), claimed_tier=$3 WHERE user_id=$4",
                            reward_yen, MAX_YEN, current_tier, user_id)
         await message.reply(f"✅ Claimed {reward_yen} Yen for reaching Tier {current_tier}!")
-
+# ================================================================
+# TYPO HANDLER (Catch-all for unknown commands)
+# ================================================================
+@dp.message()
+async def typo_handler(message: types.Message):
+    if not message.text or not message.text.startswith('/'):
+        return
+    cmd = message.text.split()[0].lower().lstrip('/')
+    if cmd in ALL_COMMANDS:
+        return
+    matches = difflib.get_close_matches(cmd, ALL_COMMANDS, n=3, cutoff=0.7)
+    if matches:
+        await message.reply(
+            f"❓ Unknown command `/{cmd}`.\n"
+            f"Did you mean: {', '.join([f'/{m}' for m in matches])}?"
+        )
+    else:
+        await message.reply(
+            f"❓ Unknown command `/{cmd}`.\n"
+            f"Type /commands to see all available commands."
+        )
 # --- Admin commands: addadmin, removeadmin, addyen, removeyen, addxp, removexp, setrank, addlevel, removelevel, recalc, diagnosis, clearbattles, broadcast ---
 # (These are mostly identical to previous code; I'll include them if needed but you already have them in your old bot.py.)
 # ================================================================
