@@ -4951,7 +4951,7 @@ async def typo_handler(message: types.Message):
         await message.reply(
             f"❓ Unknown command `/{cmd}`.\n"
             f"Type /commands to see all available commands."
-        )
+    )
 async def main():
     await on_startup()
     await dp.start_polling(bot)
