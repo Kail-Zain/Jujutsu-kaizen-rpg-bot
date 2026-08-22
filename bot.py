@@ -4931,9 +4931,7 @@ async def season_claim_cmd(message: types.Message):
         await conn.execute("UPDATE players SET yen=LEAST(yen+$1,$2), claimed_tier=$3 WHERE user_id=$4",
                            reward_yen, MAX_YEN, current_tier, user_id)
         await message.reply(f"✅ Claimed {reward_yen} Yen for reaching Tier {current_tier}!")
-# ================================================================
-# TYPO HANDLER (Catch-all for unknown commands)
-# ================================================================
+
 @dp.message()
 async def typo_handler(message: types.Message):
     if not message.text or not message.text.startswith('/'):
@@ -4951,7 +4949,8 @@ async def typo_handler(message: types.Message):
         await message.reply(
             f"❓ Unknown command `/{cmd}`.\n"
             f"Type /commands to see all available commands."
-    )
+        )  # <--- This must be a regular closing parenthesis ')', NOT a curly brace '}'
+
 async def main():
     await on_startup()
     await dp.start_polling(bot)
